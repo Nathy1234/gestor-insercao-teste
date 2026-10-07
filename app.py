@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.21.0'
+VERSAO = '1.22.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -502,6 +502,7 @@ class User(db.Model):
     agenda_cache_json = db.Column(db.Text)  # cache das reuniões já buscadas no link acima, pra não bater na URL a cada carregamento de página
     agenda_cache_em = db.Column(db.DateTime)
     ultimo_login = db.Column(db.DateTime)  # usado pra listar colaboradores inativos e avisar quem voltou
+    ativo        = db.Column(db.Boolean, default=True)  # False = conta desativada: não loga, mas histórico/cursos continuam
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
 
     def get_perm(self, key):
@@ -951,7 +952,7 @@ def _usuarios_equipe_insercao():
     É todo mundo marcado como "Faz parte da equipe" (User.equipe) na tela
     de usuários — pra adicionar/remover alguém dessa lista, marque ou
     desmarque o checkbox lá, não precisa mexer em código."""
-    usuarios = User.query.filter_by(equipe=True).all()
+    usuarios = User.query.filter(User.equipe == True, User.ativo.isnot(False)).all()
     return sorted(usuarios, key=lambda u: nome_exibicao(u))
 
 class Demanda(db.Model):
@@ -1631,6 +1632,7 @@ def inject_notificacoes():
     reunioes_ativas = list(_reunioes_hoje_amanha(u))
     outros_com_agenda_publica = User.query.filter(
         User.id != u.id, User.agenda_ics_url.isnot(None), User.agenda_ics_visibilidade == 'todos',
+        User.ativo.isnot(False),
     ).all()
     for outro in outros_com_agenda_publica:
         for ev in _reunioes_hoje_amanha(outro):
@@ -1697,6 +1699,9 @@ def login():
                    db.func.lower(User.username) == identificador)
         ).first()
         if u and check_pw(u.password, request.form['password']):
+            if u.ativo is False:
+                flash('Esta conta foi desativada. Fale com o administrador se precisar de acesso.', 'danger')
+                return render_template('login.html', demo_link_ativo=bool(_demo_publico_user_id()))
             if not u.password.startswith(('pbkdf2:', 'scrypt:')):
                 u.password = hash_pw(request.form['password'])
             # Se ficou ausente por um tempo, avisa a própria pessoa ao voltar
@@ -1746,7 +1751,7 @@ def esqueci_senha():
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         u = User.query.filter(db.func.lower(User.email) == email).first()
-        if u:
+        if u and u.ativo is not False:
             token = _reset_senha_serializer().dumps(u.id)
             link = url_for('resetar_senha', token=token, _external=True)
             corpo = (
@@ -1771,7 +1776,7 @@ def resetar_senha(token):
         flash('Link inválido ou expirado. Solicite a redefinição novamente.', 'danger')
         return redirect(url_for('esqueci_senha'))
     u = User.query.get(user_id)
-    if not u:
+    if not u or u.ativo is False:
         flash('Usuário não encontrado.', 'danger')
         return redirect(url_for('esqueci_senha'))
     if request.method == 'POST':
@@ -4931,7 +4936,7 @@ def usuarios():
     agora = datetime.utcnow()
     inativos = []
     for u in users:
-        if u.role == 'admin':
+        if u.role == 'admin' or u.ativo is False:
             continue
         if u.ultimo_login:
             dias = (agora - u.ultimo_login).days
@@ -5115,6 +5120,25 @@ def usuario_foto(id):
         abort(404)
     return Response(u.foto, mimetype=u.foto_mimetype or 'image/jpeg')
 
+@app.route('/usuarios/<int:id>/ativar-desativar', methods=['POST'])
+@admin_required
+def usuario_ativar_desativar(id):
+    """Desativa (ou reativa) uma conta sem apagar nada — a pessoa só deixa de
+    conseguir entrar e some das listas da equipe. Alternativa ao Excluir pra
+    quem saiu da equipe mas tem histórico/cursos no nome."""
+    u = User.query.get_or_404(id)
+    if u.id == session['user_id']:
+        flash('Você não pode desativar sua própria conta.', 'danger')
+        return redirect(url_for('usuarios'))
+    u.ativo = (u.ativo is False)
+    if not u.ativo:
+        u.equipe = False  # sai do Calendário/listas de "Faz parte da equipe"
+    db.session.commit()
+    acao = 'reativar' if u.ativo else 'desativar'
+    log_action(session['user_id'], session['username'], acao, 'user', u.id, u.username)
+    flash(f'Usuário "{u.username}" ' + ('reativado — já pode entrar de novo.' if u.ativo else 'desativado — não consegue mais entrar no sistema.'), 'success')
+    return redirect(url_for('usuarios'))
+
 @app.route('/usuarios/<int:id>/excluir', methods=['POST'])
 @admin_required
 def usuario_excluir(id):
@@ -5227,7 +5251,7 @@ def mural():
         dias = _mural_log_dias()
         linhas = _mural_log_linhas(u, dias)
         return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
-                               todos_usuarios=User.query.filter(User.id != u.id).order_by(User.username).all(),
+                               todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
                                log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
                                log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS,
                                log_inclui_sistema=u.can_view_historico())
@@ -5252,7 +5276,7 @@ def mural():
     conversas = _mural_minhas_conversas(u.id)
     if contato and contato.id not in {c.id for c in conversas}:
         conversas = [contato] + conversas  # conversa nova, ainda sem mensagem enviada
-    todos_usuarios = User.query.filter(User.id != u.id).order_by(User.username).all()
+    todos_usuarios = User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all()
 
     return render_template('mural.html', mensagens=mensagens, emojis=EMOJIS_MURAL,
                            reacoes_por_msg=reacoes_por_msg, minhas_reacoes=minhas_reacoes,
@@ -8598,7 +8622,8 @@ def _run_migrations():
                            ("telefone_whatsapp", "VARCHAR(30)"), ("whatsapp_prefs", "TEXT"),
                            ("whatsapp_apikey", "VARCHAR(50)"), ("agenda_ics_url", "TEXT"),
                            ("agenda_ics_visibilidade", "VARCHAR(20) DEFAULT 'pessoal'"),
-                           ("agenda_cache_json", "TEXT"), ("agenda_cache_em", "TIMESTAMP")]:
+                           ("agenda_cache_json", "TEXT"), ("agenda_cache_em", "TIMESTAMP"),
+                           ("ativo", "BOOLEAN DEFAULT true")]:
             try:
                 tbl = '"user"' if is_pg else 'user'
                 sql = f'ALTER TABLE {tbl} ADD COLUMN {col} {dtype}'
@@ -8679,6 +8704,20 @@ def ensure_db():
             return "Erro ao conectar com o banco de dados. Tente novamente em instantes.", 500
 
 ROTAS_LIVRES_TROCA_SENHA = {'minha_conta', 'logout', 'login', 'static', 'esqueci_senha', 'resetar_senha'}
+
+@app.before_request
+def bloquear_conta_desativada():
+    """Quem já estava logado quando a conta foi desativada perde o acesso na
+    próxima requisição — não espera a sessão expirar."""
+    if request.endpoint in ('login', 'logout', 'static') or request.endpoint is None:
+        return
+    if 'user_id' not in session:
+        return
+    u = User.query.get(session['user_id'])
+    if u and u.ativo is False:
+        session.clear()
+        flash('Esta conta foi desativada. Fale com o administrador se precisar de acesso.', 'danger')
+        return redirect(url_for('login'))
 
 @app.before_request
 def exigir_troca_senha():
