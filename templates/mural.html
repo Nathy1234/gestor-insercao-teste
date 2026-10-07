@@ -26,6 +26,7 @@
   </div>
 
   {% if aba == 'logs' %}
+  {% if not log_arquivados %}
   <div class="card" style="margin-bottom:16px">
     <div class="card-body">
       <form method="POST" action="{{ url_for('mural_log_novo') }}">
@@ -44,17 +45,29 @@
       </form>
     </div>
   </div>
+  {% endif %}
 
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
     <span style="font-size:12.5px;color:var(--text-muted)">Período:</span>
     {% for d in log_periodos %}
-    <a href="{{ url_for('mural', aba='logs', dias=d) }}" class="mural-tab {% if d == log_dias %}active{% endif %}" style="padding:4px 10px">{{ 'Hoje' if d == 1 else d ~ ' dias' }}</a>
+    <a href="{{ url_for('mural', aba='logs', dias=d) }}" class="mural-tab {% if d == log_dias and not log_arquivados %}active{% endif %}" style="padding:4px 10px">{{ 'Hoje' if d == 1 else d ~ ' dias' }}</a>
     {% endfor %}
-    <div style="margin-left:auto;display:flex;gap:6px">
+    <a href="{{ url_for('mural', aba='logs', arquivados=1) }}" class="mural-tab {% if log_arquivados %}active{% endif %}" style="padding:4px 10px" title="Registros com mais de {{ log_dias_ativo }} dias">🗄 Arquivados</a>
+    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
       <button type="button" class="btn btn-secondary" onclick="copiarLogChatGPT(this)">📋 Copiar para o ChatGPT</button>
+      {% if not log_arquivados %}
       <a href="{{ url_for('mural_logs_txt', dias=log_dias) }}" class="btn btn-secondary">⬇ Baixar .txt</a>
+      <a href="{{ url_for('mural_logs_xlsx', dias=log_dias) }}" class="btn btn-secondary">📊 Exportar Excel</a>
+      {% else %}
+      <a href="{{ url_for('mural_logs_xlsx', arquivados=1) }}" class="btn btn-secondary">📊 Exportar Excel (todos arquivados)</a>
+      {% endif %}
     </div>
   </div>
+  {% if log_arquivados %}
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+    Registros com mais de {{ log_dias_ativo }} dias saem da linha do tempo e ficam guardados aqui — nada é apagado.
+  </div>
+  {% endif %}
   <textarea id="logTextoChatGPT" style="display:none">{{ log_texto }}</textarea>
 
   <div class="card">
@@ -98,7 +111,7 @@
         </form>
         {% endif %}
       </div>
-      {% if l.id and (l.user_id == session.user_id or session.role == 'admin') %}
+      {% if l.id and (session.role == 'admin' or (l.user_id == session.user_id and l.origem != 'gestor')) %}
       <form method="POST" action="{{ url_for('mural_log_excluir', id=l.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-sm btn-secondary" style="color:#dc2626" data-confirm="Excluir este registro do log?">Excluir</button>
@@ -106,9 +119,16 @@
       {% endif %}
     </div>
     {% else %}
-    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px">Nenhuma atualização nesse período.</div>
+    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px">{{ 'Nada arquivado ainda.' if log_arquivados else 'Nenhuma atualização nesse período.' }}</div>
     {% endfor %}
   </div>
+  {% if log_arquivados and log_paginas > 1 %}
+  <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px;font-size:12.5px">
+    {% if log_pagina > 1 %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba='logs', arquivados=1, pagina=log_pagina-1) }}">← Mais recentes</a>{% endif %}
+    <span style="color:var(--text-muted)">Página {{ log_pagina }} de {{ log_paginas }}</span>
+    {% if log_pagina < log_paginas %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba='logs', arquivados=1, pagina=log_pagina+1) }}">Mais antigos →</a>{% endif %}
+  </div>
+  {% endif %}
 
   {% elif aba == 'publico' %}
   <div id="avisoNovasMsgs" style="display:none;margin-bottom:12px">

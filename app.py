@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.25.0'
+VERSAO = '1.26.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -883,8 +883,8 @@ class MuralLog(db.Model):
     origem     = db.Column(db.String(20), default='outro')  # planilha, teams, outro
     texto      = db.Column(db.Text, nullable=False)
     link       = db.Column(db.String(500))
-    audit_id   = db.Column(db.Integer)  # quando é detalhe de uma mudança de disciplina feita no Gestor (AuditLog.id)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    audit_id   = db.Column(db.Integer, index=True)  # liga a linha 🎓 Gestor (origem='gestor') e os detalhes dela à mudança original (AuditLog.id)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     autor = db.relationship('User', foreign_keys=[user_id])
 
@@ -1392,6 +1392,11 @@ def log_action(user_id, username, action, entity, entity_id, detail=''):
                      entity=entity, entity_id=entity_id, detail=detail)
     db.session.add(entry)
     db.session.commit()
+    if entity in MURAL_LOG_ENTIDADES_GESTOR:
+        # O AuditLog é arquivado/apagado com 30 dias (arquivar_logs_antigos);
+        # a cópia no Log do Mural fica 90 dias ativa e depois em Arquivados.
+        db.session.add(_mural_log_de_auditoria(entry))
+        db.session.commit()
 
 def _resumo_mudancas(antes, depois, labels):
     """Compara os valores de campos simples antes/depois de uma edição e monta
@@ -5229,50 +5234,80 @@ MURAL_LOG_PERIODOS = [1, 7, 30, 90]
 # o resto do Gestor fica no Histórico.
 MURAL_LOG_ENTIDADES_GESTOR = ('disciplina_modulo', 'discipline')
 
+MURAL_LOG_DIAS_ATIVO = 90  # depois disso o registro sai da linha do tempo e vai pra "Arquivados"
+MURAL_LOG_POR_PAGINA_ARQUIVO = 100
+
 def _br(dt):
     return dt.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if dt else None
 
-def _mural_log_linhas(dias):
-    """Linha do tempo da aba Logs: registros externos da equipe (MuralLog —
-    planilha, Teams etc.) + mudanças de disciplina feitas no Gestor
-    (AuditLog). Pra não repetir a mesma atualização duas vezes, um registro
-    externo pode ser "detalhe" de uma mudança do Gestor (audit_id) — aí ele
-    aparece dentro dessa linha, não como linha separada."""
-    desde = datetime.utcnow() - timedelta(days=dias)
-    linhas = []
-    detalhes_por_audit = {}
-    for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.asc()).limit(2000):
-        item = {'quando': r.created_at, 'quando_br': _br(r.created_at),
-                'quem': r.autor.username if r.autor else (r.autor_nome or 'ChatGPT'),
-                'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
-                'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id, 'detalhes': []}
-        if r.audit_id:
-            detalhes_por_audit.setdefault(r.audit_id, []).append(item)
-        else:
-            linhas.append(item)
-    auditorias = AuditLog.query.filter(
-        db.or_(AuditLog.timestamp >= desde, AuditLog.id.in_(list(detalhes_por_audit) or [0])),
-        AuditLog.entity.in_(MURAL_LOG_ENTIDADES_GESTOR),
-    ).order_by(AuditLog.timestamp.desc()).limit(1000).all()
-    vistos = set()
-    for a in auditorias:
-        vistos.add(a.id)
-        texto = f'{a.action} disciplina' + (f' — {a.detail}' if a.detail else '')
-        linhas.append({'quando': a.timestamp, 'quando_br': _br(a.timestamp), 'quem': a.username or '?',
-                       'origem': 'gestor', 'rotulo': '🎓 Gestor', 'texto': texto, 'link': None,
-                       'id': None, 'audit_id': a.id, 'user_id': a.user_id,
-                       'detalhes': detalhes_por_audit.get(a.id, [])})
-    # detalhe cuja linha do Gestor não existe mais — mostra solto, não some
-    for audit_id, itens in detalhes_por_audit.items():
-        if audit_id not in vistos:
-            linhas.extend(itens)
-    linhas.sort(key=lambda l: l['quando'] or datetime.min, reverse=True)
-    return linhas
+def _mural_log_de_auditoria(a):
+    return MuralLog(user_id=a.user_id, autor_nome=a.username, origem='gestor', audit_id=a.id,
+                    texto=f'{a.action} disciplina' + (f' — {a.detail}' if a.detail else ''),
+                    created_at=a.timestamp or datetime.utcnow())
 
-def _mural_log_texto(linhas, dias):
+def _mural_log_copiar_gestor():
+    """Garante que toda mudança de disciplina que ainda está no AuditLog tem
+    sua linha 🎓 Gestor no Log do Mural (cobre as que já existiam antes da
+    cópia automática e roda antes do AuditLog ser arquivado)."""
+    ja = {x[0] for x in db.session.query(MuralLog.audit_id).filter(MuralLog.origem == 'gestor').all()}
+    novos = [a for a in AuditLog.query.filter(AuditLog.entity.in_(MURAL_LOG_ENTIDADES_GESTOR)).all() if a.id not in ja]
+    for a in novos:
+        db.session.add(_mural_log_de_auditoria(a))
+    if novos:
+        db.session.commit()
+    return len(novos)
+
+def _mural_log_gestor_valido(audit_id):
+    return bool(audit_id) and MuralLog.query.filter_by(origem='gestor', audit_id=audit_id).first() is not None
+
+def _mural_log_item(r):
+    return {'quando': r.created_at, 'quando_br': _br(r.created_at),
+            'quem': r.autor.username if r.autor else (r.autor_nome or 'ChatGPT'),
+            'origem': r.origem, 'rotulo': '🎓 Gestor' if r.origem == 'gestor' else MURAL_LOG_ORIGENS.get(r.origem, r.origem),
+            'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id,
+            'audit_id': r.audit_id if r.origem == 'gestor' else None, 'detalhes': []}
+
+def _mural_log_linhas(dias=None, arquivados=False, pagina=1):
+    """Linha do tempo da aba Logs: registros externos (planilha, Teams...) +
+    as linhas 🎓 Gestor (mudança de disciplina). Um registro externo ligado
+    a uma linha do Gestor (mesmo audit_id) aparece como detalhe dela, não
+    como linha separada — assim a mesma atualização não se repete.
+    Ativo = últimos MURAL_LOG_DIAS_ATIVO dias; mais velho que isso só em
+    Arquivados, paginado, pra não carregar tudo de uma vez.
+    Devolve (linhas, total_de_paginas)."""
+    limite = datetime.utcnow() - timedelta(days=MURAL_LOG_DIAS_ATIVO)
+    principais = MuralLog.query.filter(db.or_(MuralLog.origem == 'gestor', MuralLog.audit_id.is_(None)))
+    if arquivados:
+        principais = principais.filter(MuralLog.created_at < limite)
+        total = principais.count()
+        paginas = max(1, -(-total // MURAL_LOG_POR_PAGINA_ARQUIVO))
+        pagina = min(max(1, pagina), paginas)
+        principais = principais.order_by(MuralLog.created_at.desc())\
+            .offset((pagina - 1) * MURAL_LOG_POR_PAGINA_ARQUIVO).limit(MURAL_LOG_POR_PAGINA_ARQUIVO).all()
+    else:
+        desde = datetime.utcnow() - timedelta(days=min(dias or 7, MURAL_LOG_DIAS_ATIVO))
+        principais = principais.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.desc()).limit(3000).all()
+        paginas = 1
+    linhas = [_mural_log_item(r) for r in principais]
+    por_audit = {l['audit_id']: l for l in linhas if l['audit_id']}
+    if por_audit:
+        for d in MuralLog.query.filter(MuralLog.audit_id.in_(list(por_audit)), MuralLog.origem != 'gestor')\
+                .order_by(MuralLog.created_at.asc()).all():
+            por_audit[d.audit_id]['detalhes'].append(_mural_log_item(d))
+    if not arquivados:
+        # detalhe cuja linha do Gestor ficou fora do período — mostra solto, não some
+        desde = datetime.utcnow() - timedelta(days=min(dias or 7, MURAL_LOG_DIAS_ATIVO))
+        for d in MuralLog.query.filter(MuralLog.audit_id.isnot(None), MuralLog.origem != 'gestor',
+                                       MuralLog.created_at >= desde).all():
+            if d.audit_id not in por_audit:
+                linhas.append(_mural_log_item(d))
+        linhas.sort(key=lambda l: l['quando'] or datetime.min, reverse=True)
+    return linhas, paginas
+
+def _mural_log_texto(linhas, dias, titulo=None):
     """Versão em texto puro da linha do tempo, pra colar/enviar pro ChatGPT."""
     agora = datetime.now(_BRASIL_TZ).strftime('%d/%m/%Y %H:%M')
-    saida = [f'LOG DA EQUIPE — últimos {dias} dia(s) — gerado em {agora} (horário de Brasília)',
+    saida = [f'LOG DA EQUIPE — {titulo or f"últimos {dias} dia(s)"} — gerado em {agora} (horário de Brasília)',
              f'{len(linhas)} registro(s), do mais recente pro mais antigo.', '']
     for l in linhas:
         quando = l['quando_br'].strftime('%d/%m/%Y %H:%M') if l['quando_br'] else '?'
@@ -5300,11 +5335,17 @@ def mural():
     contato = None
     if aba == 'logs':
         dias = _mural_log_dias()
-        linhas = _mural_log_linhas(dias)
+        arquivados = request.args.get('arquivados') == '1'
+        pagina = request.args.get('pagina', 1, type=int)
+        linhas, paginas = _mural_log_linhas(dias, arquivados=arquivados, pagina=pagina)
+        pagina = min(max(1, pagina), paginas)
+        titulo = f'arquivados (mais de {MURAL_LOG_DIAS_ATIVO} dias) — página {pagina} de {paginas}' if arquivados else None
         return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
                                todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
-                               log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
-                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS)
+                               log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias, titulo), log_dias=dias,
+                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS,
+                               log_arquivados=arquivados, log_pagina=pagina, log_paginas=paginas,
+                               log_dias_ativo=MURAL_LOG_DIAS_ATIVO)
     if aba != 'publico':
         contato = User.query.get(aba) if aba.isdigit() else None
         if not contato or contato.id == u.id:
@@ -5361,10 +5402,8 @@ def mural_log_novo():
     if link and not link.lower().startswith(('http://', 'https://')):
         link = ''  # só link web de verdade — evita javascript: no href
     audit_id = request.form.get('audit_id', type=int)
-    if audit_id:
-        a = AuditLog.query.get(audit_id)
-        if not a or a.entity not in MURAL_LOG_ENTIDADES_GESTOR:
-            audit_id = None
+    if audit_id and not _mural_log_gestor_valido(audit_id):
+        audit_id = None
     if not texto:
         flash('Descreva o que foi atualizado.', 'danger')
         return redirect(url_for('mural', aba='logs'))
@@ -5378,8 +5417,8 @@ def mural_log_novo():
 @perm_check('can_view_mural')
 def mural_log_excluir(id):
     r = MuralLog.query.get_or_404(id)
-    if r.user_id != session['user_id'] and session.get('role') != 'admin':
-        flash('Só quem registrou pode excluir.', 'danger')
+    if session.get('role') != 'admin' and (r.user_id != session['user_id'] or r.origem == 'gestor'):
+        flash('Só quem registrou pode excluir (linhas automáticas do Gestor, só o admin).', 'danger')
         return redirect(url_for('mural', aba='logs'))
     db.session.delete(r)
     db.session.commit()
@@ -5390,10 +5429,56 @@ def mural_log_excluir(id):
 @perm_check('can_view_mural')
 def mural_logs_txt():
     dias = _mural_log_dias()
-    texto = _mural_log_texto(_mural_log_linhas(dias), dias)
+    texto = _mural_log_texto(_mural_log_linhas(dias)[0], dias)
     nome = f'log_equipe_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.txt'
     return Response(texto, mimetype='text/plain; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename={nome}'})
+
+@app.route('/mural/logs.xlsx')
+@perm_check('can_view_mural')
+def mural_logs_xlsx():
+    """Exporta o Log do Mural em Excel — do período escolhido (até 90 dias)
+    ou de tudo que está em Arquivados. Detalhes vêm logo abaixo da linha
+    do Gestor a que pertencem."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    arquivados = request.args.get('arquivados') == '1'
+    dias = _mural_log_dias()
+    if arquivados:
+        linhas, paginas = _mural_log_linhas(arquivados=True, pagina=1)
+        for pg in range(2, paginas + 1):
+            linhas += _mural_log_linhas(arquivados=True, pagina=pg)[0]
+    else:
+        linhas, _ = _mural_log_linhas(dias)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Arquivados' if arquivados else f'Log {dias} dias'
+    cab = ['Data/hora (Brasília)', 'Quem', 'Origem', 'Tipo', 'Descrição', 'Link']
+    ws.append(cab)
+    for c in ws[1]:
+        c.font = Font(bold=True, color='FFFFFF')
+        c.fill = PatternFill('solid', fgColor='F2780D')
+    nomes_origem = {'planilha': 'Planilha', 'teams': 'Teams', 'outro': 'Outro', 'gestor': 'Gestor'}
+    def _linha(l, tipo):
+        ws.append([l['quando_br'].replace(tzinfo=None) if l['quando_br'] else None, l['quem'],
+                   nomes_origem.get(l['origem'], l['origem']), tipo, l['texto'], l['link'] or ''])
+        ws.cell(row=ws.max_row, column=1).number_format = 'dd/mm/yyyy hh:mm'
+        ws.cell(row=ws.max_row, column=5).alignment = Alignment(wrap_text=True, vertical='top')
+    for l in linhas:
+        _linha(l, 'Registro')
+        for d in l.get('detalhes', []):
+            _linha(d, 'Detalhe')
+    for col, larg in zip('ABCDEF', (18, 18, 11, 10, 80, 45)):
+        ws.column_dimensions[col].width = larg
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    sufixo = 'arquivados' if arquivados else f'{dias}dias'
+    nome = f'log_equipe_{sufixo}_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.xlsx'
+    return send_file(buf, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=nome)
 
 def _api_log_autorizada():
     """Chave da API do Log (LOG_API_TOKEN na Vercel) — sem ela configurada a
@@ -5452,7 +5537,7 @@ def api_log_externo():
         return jsonify({'ok': False, 'erro': 'Não autorizado'}), 401
     if request.method == 'GET':
         dias = _mural_log_dias()
-        linhas = _mural_log_linhas(dias)
+        linhas, _ = _mural_log_linhas(dias)
         if request.args.get('formato') == 'json':
             return jsonify({'ok': True, 'dias': dias, 'registros': [
                 {'quando': l['quando_br'].isoformat() if l['quando_br'] else None, 'quem': l['quem'],
@@ -5495,10 +5580,8 @@ def api_log_externo():
                 pass
         autor = usuarios_por_email.get(str(r.get('autor_email') or '').strip().lower())
         audit_id = r.get('gestor_id') if isinstance(r.get('gestor_id'), int) else None
-        if audit_id:
-            a = AuditLog.query.get(audit_id)
-            if not a or a.entity not in MURAL_LOG_ENTIDADES_GESTOR:
-                audit_id = None
+        if audit_id and not _mural_log_gestor_valido(audit_id):
+            audit_id = None
         db.session.add(MuralLog(user_id=autor.id if autor else None,
                                 autor_nome=None if autor else (str(r.get('autor') or '').strip()[:200] or None),
                                 origem=origem, texto=texto[:2000], link=link[:500] or None,
@@ -7378,6 +7461,7 @@ def arquivar_logs_antigos():
     de 1 mês — não perde o histórico (ele continua tanto no e-mail de arquivo
     quanto dentro dos backups diários completos), só tira da tabela usada no
     dia a dia para o sistema não ficar sobrecarregado."""
+    _mural_log_copiar_gestor()  # disciplina já copiada pro Log do Mural antes de sair daqui
     limite = datetime.utcnow() - timedelta(days=30)
     antigos = AuditLog.query.filter(AuditLog.timestamp < limite).all()
     if not antigos:
@@ -8872,6 +8956,7 @@ def ensure_db():
             db.create_all()
             _run_migrations()
             seed_data()
+            _mural_log_copiar_gestor()
             # Limpeza pontual: algum import antigo pode ter gravado a string
             # literal "None" em vez de deixar o campo vazio de verdade.
             User.query.filter(User.nome == 'None').update({'nome': None})
