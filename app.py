@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.24.0'
+VERSAO = '1.25.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -2383,6 +2383,29 @@ def cursos_status_em_lote():
         log_action(session['user_id'], session['username'], 'status_em_lote', 'course', None,
                    f'{total} curso(s) -> status={novo_status}')
     return jsonify({'ok': True, 'total': total})
+
+@app.route('/cursos/excluir-em-lote', methods=['POST'])
+@admin_required
+def cursos_excluir_em_lote():
+    """Exclui permanentemente vários cursos de uma vez (e as disciplinas
+    deles) — mesmo efeito do Excluir de um curso só. Só admin, e a tela
+    exige digitar EXCLUIR antes de mandar; o backup diário cobre arrependimento."""
+    data = request.json or {}
+    ids = [i for i in data.get('ids', []) if isinstance(i, int)]
+    if data.get('confirmacao') != 'EXCLUIR':
+        return jsonify({'ok': False, 'erro': 'Confirmação inválida.'}), 400
+    if not ids:
+        return jsonify({'ok': False, 'erro': 'Nenhum curso selecionado.'}), 400
+    cursos_sel = Course.query.filter(Course.id.in_(ids)).all()
+    nomes = [c.nome for c in cursos_sel]
+    for c in cursos_sel:
+        Discipline.query.filter_by(course_id=c.id).delete()
+        db.session.delete(c)
+    db.session.commit()
+    if nomes:
+        log_action(session['user_id'], session['username'], 'excluir_em_lote', 'course', None,
+                   f'{len(nomes)} curso(s): ' + '; '.join(nomes)[:3000])
+    return jsonify({'ok': True, 'total': len(nomes)})
 
 @app.route('/cursos/editar-em-lote', methods=['POST'])
 @editor_required

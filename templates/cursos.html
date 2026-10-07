@@ -107,6 +107,9 @@
     <button type="button" class="btn btn-sm btn-secondary" onclick="toggleEditarLote()">
       Editar selecionados
     </button>
+    <button type="button" class="btn btn-sm btn-danger" onclick="excluirEmLote()">
+      Excluir selecionados
+    </button>
     <button type="button" class="btn btn-sm btn-secondary" onclick="limparSelecao()">Cancelar</button>
   </div>
 
@@ -369,6 +372,32 @@ function aplicarEdicaoLote() {
       setTimeout(() => location.reload(), 900);
     } else {
       showToast(data.erro || 'Erro ao atualizar cursos.', 'danger');
+    }
+  });
+}
+
+function excluirEmLote() {
+  const ids = Array.from(document.querySelectorAll('.chk-curso:checked')).map(chk => parseInt(chk.value));
+  if (ids.length === 0) return;
+  const resp = prompt(`ATENÇÃO: isso exclui PERMANENTEMENTE ${ids.length} curso(s) selecionado(s) e as disciplinas deles.
+
+Se só quer tirar de circulação, use "Aplicar status" (Oculto/Arquivado).
+
+Para confirmar, digite EXCLUIR:`);
+  if (resp === null) return;
+  if (resp.trim() !== 'EXCLUIR') { showToast('Exclusão cancelada — a confirmação não bateu.', 'warning'); return; }
+  fetch('/cursos/excluir-em-lote', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ids: ids, confirmacao: 'EXCLUIR'})
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.ok) {
+      showToast(data.total + ' curso(s) excluído(s).', 'success');
+      setTimeout(() => location.reload(), 900);
+    } else {
+      showToast(data.erro || 'Erro ao excluir cursos.', 'danger');
     }
   });
 }
