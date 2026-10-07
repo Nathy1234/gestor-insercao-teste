@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.23.0'
+VERSAO = '1.24.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -877,7 +877,9 @@ class MuralLog(db.Model):
     o que mexeu fora do sistema (planilha, Teams, etc.). Junto com o
     AuditLog, forma a linha do tempo exportada em texto pro ChatGPT."""
     id         = db.Column(db.Integer, primary_key=True)
-    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'))  # vazio quando veio pela API (ChatGPT)
+    autor_nome = db.Column(db.String(200))  # nome do autor informado pela API, quando não bate com usuário
+    id_externo = db.Column(db.String(200), index=True)  # id da mensagem/planilha na origem — evita duplicar na API
     origem     = db.Column(db.String(20), default='outro')  # planilha, teams, outro
     texto      = db.Column(db.Text, nullable=False)
     link       = db.Column(db.String(500))
@@ -5217,7 +5219,8 @@ def _mural_log_linhas(dias):
     linhas = []
     detalhes_por_audit = {}
     for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.asc()).limit(2000):
-        item = {'quando': r.created_at, 'quando_br': _br(r.created_at), 'quem': r.autor.username if r.autor else '?',
+        item = {'quando': r.created_at, 'quando_br': _br(r.created_at),
+                'quem': r.autor.username if r.autor else (r.autor_nome or 'ChatGPT'),
                 'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
                 'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id, 'detalhes': []}
         if r.audit_id:
@@ -5368,6 +5371,118 @@ def mural_logs_txt():
     nome = f'log_equipe_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.txt'
     return Response(texto, mimetype='text/plain; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename={nome}'})
+
+def _api_log_autorizada():
+    """Chave da API do Log (LOG_API_TOKEN na Vercel) — sem ela configurada a
+    API fica desligada, não aberta."""
+    token = os.environ.get('LOG_API_TOKEN')
+    if not token:
+        return False
+    enviado = request.headers.get('Authorization', '')
+    return secrets.compare_digest(enviado.encode(), f'Bearer {token}'.encode())
+
+@app.route('/api/log-externo/openapi.json')
+def api_log_externo_openapi():
+    """Descrição da API do Log pro editor de GPTs do ChatGPT (Actions →
+    Importar de URL). Não tem dado nenhum, só o formato — a chave fica na
+    configuração de autenticação do GPT."""
+    base = request.url_root.rstrip('/')
+    registro = {'type': 'object', 'required': ['texto'], 'properties': {
+        'origem': {'type': 'string', 'enum': list(MURAL_LOG_ORIGENS), 'description': 'teams, planilha ou outro'},
+        'texto': {'type': 'string', 'description': 'Resumo curto do que foi atualizado'},
+        'link': {'type': 'string', 'description': 'Link da mensagem do Teams ou da planilha'},
+        'autor': {'type': 'string', 'description': 'Nome de quem fez a atualização'},
+        'autor_email': {'type': 'string', 'description': 'E-mail @fatecie.edu.br de quem fez, se souber'},
+        'quando': {'type': 'string', 'description': 'Data/hora ISO 8601 da atualização na origem'},
+        'id_externo': {'type': 'string', 'description': 'Id único na origem (ex.: teams:<id da mensagem>, planilha:<id>:<versão>) — evita duplicar'},
+        'gestor_id': {'type': 'integer', 'description': 'gestor_id da linha GESTOR (mudança de disciplina) quando for a mesma atualização — vira detalhe dela em vez de linha nova'},
+    }}
+    return jsonify({
+        'openapi': '3.1.0',
+        'info': {'title': 'Log da Equipe — Gestor Acadêmico', 'version': '1.0'},
+        'servers': [{'url': base}],
+        'paths': {'/api/log-externo': {
+            'get': {'operationId': 'lerLog', 'summary': 'Lê o log da equipe (externo + disciplinas do Gestor)',
+                    'parameters': [{'name': 'dias', 'in': 'query', 'schema': {'type': 'integer', 'enum': MURAL_LOG_PERIODOS}},
+                                   {'name': 'formato', 'in': 'query', 'schema': {'type': 'string', 'enum': ['texto', 'json']}}],
+                    'responses': {'200': {'description': 'Log'}}},
+            'post': {'operationId': 'registrarNoLog', 'summary': 'Registra atualizações externas (Teams/planilhas) no log',
+                     'requestBody': {'required': True, 'content': {'application/json': {'schema': {
+                         'type': 'object', 'required': ['registros'],
+                         'properties': {'registros': {'type': 'array', 'maxItems': 200, 'items': registro}}}}}},
+                     'responses': {'200': {'description': 'Contagem de inseridos/repetidos'}}},
+        }},
+        'components': {'securitySchemes': {'chave': {'type': 'http', 'scheme': 'bearer'}}},
+        'security': [{'chave': []}],
+    })
+
+@app.route('/api/log-externo', methods=['GET', 'POST'])
+@csrf.exempt
+@limiter.limit("120 per hour")
+def api_log_externo():
+    """Porta de entrada automática da aba Logs do Mural: o ChatGPT (que lê o
+    Teams e as planilhas) manda aqui, de hora em hora, o que encontrou de
+    novo — e também consegue ler o log inteiro por aqui (GET). Protegida por
+    LOG_API_TOKEN; um mesmo id_externo nunca entra duas vezes, então reenviar
+    a mesma mensagem/planilha não duplica."""
+    if not _api_log_autorizada():
+        return jsonify({'ok': False, 'erro': 'Não autorizado'}), 401
+    if request.method == 'GET':
+        dias = _mural_log_dias()
+        linhas = _mural_log_linhas(dias)
+        if request.args.get('formato') == 'json':
+            return jsonify({'ok': True, 'dias': dias, 'registros': [
+                {'quando': l['quando_br'].isoformat() if l['quando_br'] else None, 'quem': l['quem'],
+                 'origem': l['origem'], 'texto': l['texto'], 'link': l['link'], 'gestor_id': l.get('audit_id'),
+                 'detalhes': [{'quem': d['quem'], 'origem': d['origem'], 'texto': d['texto'], 'link': d['link']}
+                              for d in l.get('detalhes', [])]}
+                for l in linhas]})
+        return Response(_mural_log_texto(linhas, dias), mimetype='text/plain; charset=utf-8')
+
+    dados = request.get_json(silent=True) or {}
+    registros = dados.get('registros') if isinstance(dados, dict) else None
+    if not isinstance(registros, list) or not registros or len(registros) > 200:
+        return jsonify({'ok': False, 'erro': 'Envie {"registros": [...]} com 1 a 200 itens.'}), 400
+    usuarios_por_email = {(x.email or '').lower(): x for x in User.query.all() if x.email}
+    inseridos = repetidos = invalidos = 0
+    for r in registros:
+        if not isinstance(r, dict):
+            invalidos += 1
+            continue
+        texto = str(r.get('texto') or '').strip()
+        if not texto:
+            invalidos += 1
+            continue
+        id_externo = str(r.get('id_externo') or '').strip()[:200] or None
+        if id_externo and MuralLog.query.filter_by(id_externo=id_externo).first():
+            repetidos += 1
+            continue
+        origem = r.get('origem') if r.get('origem') in MURAL_LOG_ORIGENS else 'outro'
+        link = str(r.get('link') or '').strip()
+        if not link.lower().startswith(('http://', 'https://')):
+            link = ''
+        quando = datetime.utcnow()
+        if r.get('quando'):
+            try:
+                dt = datetime.fromisoformat(str(r['quando']).replace('Z', '+00:00'))
+                quando = (dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo
+                          else dt.replace(tzinfo=_BRASIL_TZ).astimezone(timezone.utc).replace(tzinfo=None))
+                quando = min(quando, datetime.utcnow())
+            except (ValueError, TypeError):
+                pass
+        autor = usuarios_por_email.get(str(r.get('autor_email') or '').strip().lower())
+        audit_id = r.get('gestor_id') if isinstance(r.get('gestor_id'), int) else None
+        if audit_id:
+            a = AuditLog.query.get(audit_id)
+            if not a or a.entity not in MURAL_LOG_ENTIDADES_GESTOR:
+                audit_id = None
+        db.session.add(MuralLog(user_id=autor.id if autor else None,
+                                autor_nome=None if autor else (str(r.get('autor') or '').strip()[:200] or None),
+                                origem=origem, texto=texto[:2000], link=link[:500] or None,
+                                id_externo=id_externo, audit_id=audit_id, created_at=quando))
+        inseridos += 1
+    db.session.commit()
+    return jsonify({'ok': True, 'inseridos': inseridos, 'repetidos': repetidos, 'invalidos': invalidos})
 
 @app.route('/mural/nova', methods=['POST'])
 @perm_check('can_view_mural')
@@ -8615,8 +8730,19 @@ def _run_migrations():
         ("disciplina_modulo", "professor", "VARCHAR(200)"),
         ("disciplina_modulo", "arquivado", "BOOLEAN DEFAULT false"),
         ("mural_log", "audit_id", "INTEGER"),
+        ("mural_log", "autor_nome", "VARCHAR(200)"),
+        ("mural_log", "id_externo", "VARCHAR(200)"),
     ]
     with db.engine.connect() as conn:
+        if is_pg:
+            try:
+                conn.execute(db.text('ALTER TABLE mural_log ALTER COLUMN user_id DROP NOT NULL'))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
         for table, col, dtype in migrations:
             try:
                 if is_pg:
