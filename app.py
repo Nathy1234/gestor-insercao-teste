@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.27.0'
+VERSAO = '1.28.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -503,6 +503,9 @@ class User(db.Model):
     agenda_cache_em = db.Column(db.DateTime)
     ultimo_login = db.Column(db.DateTime)  # usado pra listar colaboradores inativos e avisar quem voltou
     ativo        = db.Column(db.Boolean, default=True)  # False = conta desativada: não loga, mas histórico/cursos continuam
+    aniversario_dia = db.Column(db.Integer)  # só dia/mês — o ano não é guardado
+    aniversario_mes = db.Column(db.Integer)
+    aniversario_msg = db.Column(db.Text)     # mensagem de parabéns colada pelo admin pra este ano (some depois de enviada)
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
 
     def get_perm(self, key):
@@ -887,6 +890,19 @@ class MuralLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     autor = db.relationship('User', foreign_keys=[user_id])
+
+class AniversarioEnvio(db.Model):
+    """Um parabéns por pessoa por ano — a linha é gravada ANTES de enviar,
+    então duas requisições ao mesmo tempo nunca mandam a mensagem duas vezes."""
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    ano        = db.Column(db.Integer, nullable=False)
+    mensagem   = db.Column(db.Text)
+    status     = db.Column(db.String(20), default='enviando')  # enviando, enviado, erro, sem_teams
+    erro       = db.Column(db.String(500))
+    enviado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'ano', name='uq_aniversario_ano'),)
 
 TIPOS_PERGUNTA_FORMULARIO = ('texto', 'numero', 'escala', 'multipla_escolha', 'sim_nao')
 
@@ -5333,6 +5349,10 @@ def mural():
     u = User.query.get(session['user_id'])
     aba = request.args.get('aba', 'publico')
     contato = None
+    if aba == 'aniversarios':
+        return render_template('mural.html', aba='aniversarios', contato=None, conversas=_mural_minhas_conversas(u.id),
+                               todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
+                               **_mural_aniversarios_contexto(u))
     if aba in ('logs', 'gestor'):
         fonte = 'gestor' if aba == 'gestor' else 'externo'
         dias = _mural_log_dias()
@@ -5596,6 +5616,209 @@ def api_log_externo():
         inseridos += 1
     db.session.commit()
     return jsonify({'ok': True, 'inseridos': inseridos, 'repetidos': repetidos, 'invalidos': invalidos})
+
+# ─── ANIVERSÁRIOS (aba do Mural + parabéns automático no Teams) ───────────────
+
+ANIVERSARIO_HORA_ENVIO = 8  # a partir desse horário (Brasília) o parabéns do dia sai sozinho
+ANIVERSARIO_MSG_PADRAO = ('🎉 Feliz aniversário, {primeiro_nome}! 🎂\n\n'
+                          'Toda a equipe deseja um dia incrível e um novo ano cheio de conquistas. '
+                          'Obrigado por fazer parte do time!')
+MESES_PT = ['', 'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
+            'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+
+def _setting_get(chave, padrao=''):
+    s_ = AppSetting.query.get(chave)
+    return s_.value if s_ and s_.value is not None else padrao
+
+def _setting_set(chave, valor):
+    s_ = AppSetting.query.get(chave) or AppSetting(key=chave)
+    s_.value = valor
+    db.session.add(s_)
+
+def _aniversario_e_hoje(u, hoje):
+    if not (u.aniversario_dia and u.aniversario_mes):
+        return False
+    if (u.aniversario_dia, u.aniversario_mes) == (hoje.day, hoje.month):
+        return True
+    # 29/02 comemora no dia 28 quando o ano não é bissexto
+    return (u.aniversario_dia, u.aniversario_mes) == (29, 2) and (hoje.month, hoje.day) == (2, 28) \
+        and not _calendar.isleap(hoje.year)
+
+def _proximo_aniversario(u, hoje):
+    for ano in (hoje.year, hoje.year + 1):
+        dia = u.aniversario_dia
+        if u.aniversario_mes == 2 and dia == 29 and not _calendar.isleap(ano):
+            dia = 28
+        try:
+            d = date(ano, u.aniversario_mes, dia)
+        except ValueError:
+            return None
+        if d >= hoje:
+            return d
+    return None
+
+def _aniversario_mensagem(u):
+    nome = (u.nome or u.username or '').strip()
+    modelo = (u.aniversario_msg or '').strip() or _setting_get('aniversario_msg_padrao', ANIVERSARIO_MSG_PADRAO)
+    return modelo.replace('{nome}', nome).replace('{primeiro_nome}', nome.split(' ')[0] if nome else '')
+
+def _aniversario_enviar_teams(u, mensagem):
+    """Manda pro link de Workflow do Teams (Power Automate) configurado na
+    aba. O corpo serve pro modelo padrão "postar num canal quando receber
+    webhook" (cartão adaptável) e também traz email/nome/mensagem soltos,
+    pra um fluxo que mande no chat da própria pessoa. Devolve (ok, erro)."""
+    url = _setting_get('aniversario_teams_webhook').strip()
+    if not url:
+        return False, 'Link do Teams não configurado'
+    corpo = {
+        'email': u.email or '', 'nome': u.nome or u.username, 'mensagem': mensagem,
+        'type': 'message',
+        'attachments': [{'contentType': 'application/vnd.microsoft.card.adaptive', 'content': {
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json', 'type': 'AdaptiveCard', 'version': '1.4',
+            'body': [{'type': 'TextBlock', 'text': mensagem, 'wrap': True}],
+        }}],
+    }
+    try:
+        r = _requests.post(url, json=corpo, timeout=10)
+        if r.status_code >= 300:
+            return False, f'Teams respondeu {r.status_code}'
+        return True, None
+    except Exception as e:
+        return False, str(e)[:300]
+
+def _aniversario_disparar(u, hoje, forcar=False):
+    """Grava o envio do ano (trava contra duplicidade) e manda. forcar=True
+    é o botão "Enviar agora" do admin, que reenvia mesmo se já foi."""
+    registro = AniversarioEnvio.query.filter_by(user_id=u.id, ano=hoje.year).first()
+    if registro and not forcar:
+        return registro
+    mensagem = _aniversario_mensagem(u)
+    if not registro:
+        registro = AniversarioEnvio(user_id=u.id, ano=hoje.year)
+        db.session.add(registro)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()  # outra requisição pegou primeiro — ela envia
+            return None
+    ok, erro = _aniversario_enviar_teams(u, mensagem)
+    registro.mensagem, registro.enviado_em = mensagem, datetime.utcnow()
+    registro.status = 'enviado' if ok else ('sem_teams' if erro == 'Link do Teams não configurado' else 'erro')
+    registro.erro = erro
+    if ok:
+        u.aniversario_msg = None  # mensagem colada valia só pra este ano
+    db.session.commit()
+    return registro
+
+_aniversarios_checado = {'dia': None}
+
+def _aniversarios_do_dia():
+    """Roda no máximo uma vez por dia por instância (e o AniversarioEnvio
+    impede repetir entre instâncias): a partir das 8h de Brasília, manda o
+    parabéns de quem faz aniversário hoje. Não depende de cron — qualquer
+    acesso ao site (inclusive a leitura do Log pelo ChatGPT) dispara."""
+    agora = datetime.now(_BRASIL_TZ)
+    hoje = agora.date()
+    if not _db_ready or _aniversarios_checado['dia'] == hoje or agora.hour < ANIVERSARIO_HORA_ENVIO:
+        return
+    for u in User.query.filter(User.aniversario_dia.isnot(None), User.ativo.isnot(False)).all():
+        if _aniversario_e_hoje(u, hoje):
+            _aniversario_disparar(u, hoje)
+    _aniversarios_checado['dia'] = hoje  # só marca depois de rodar sem erro
+
+@app.before_request
+def _verificar_aniversarios():
+    if request.endpoint in (None, 'static'):
+        return
+    try:
+        _aniversarios_do_dia()
+    except Exception:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()  # aniversário nunca derruba a página
+
+@app.route('/mural/aniversarios/salvar', methods=['POST'])
+@admin_required
+def mural_aniversarios_salvar():
+    """Admin salva as datas (dia/mês) e as mensagens coladas de cada pessoa."""
+    for u in User.query.filter(User.ativo.isnot(False)).all():
+        data_txt = (request.form.get(f'data_{u.id}') or '').strip()
+        if f'data_{u.id}' not in request.form:
+            continue
+        dia = mes = None
+        if data_txt:
+            m = _re.match(r'^(\d{1,2})[/\-.](\d{1,2})', data_txt)
+            if not m:
+                # input type=date manda AAAA-MM-DD
+                m2 = _re.match(r'^\d{4}-(\d{2})-(\d{2})$', data_txt)
+                if m2:
+                    mes, dia = int(m2.group(1)), int(m2.group(2))
+            else:
+                dia, mes = int(m.group(1)), int(m.group(2))
+            if not (dia and mes and 1 <= mes <= 12 and 1 <= dia <= _calendar.monthrange(2000, mes)[1]):
+                flash(f'Data inválida para {u.username}: "{data_txt}" — use DD/MM.', 'danger')
+                return redirect(url_for('mural', aba='aniversarios'))
+        u.aniversario_dia, u.aniversario_mes = dia, mes
+        u.aniversario_msg = (request.form.get(f'msg_{u.id}') or '').strip()[:2000] or None
+    db.session.commit()
+    flash('Aniversários salvos.', 'success')
+    return redirect(url_for('mural', aba='aniversarios'))
+
+@app.route('/mural/aniversarios/config', methods=['POST'])
+@admin_required
+def mural_aniversarios_config():
+    url = (request.form.get('webhook') or '').strip()
+    if url and not url.lower().startswith('https://'):
+        flash('O link do Teams precisa começar com https://', 'danger')
+        return redirect(url_for('mural', aba='aniversarios'))
+    if request.form.get('manter_webhook') != '1' or url:
+        _setting_set('aniversario_teams_webhook', url)
+    _setting_set('aniversario_msg_padrao', (request.form.get('msg_padrao') or '').strip()[:2000] or ANIVERSARIO_MSG_PADRAO)
+    db.session.commit()
+    flash('Configuração de aniversários salva.', 'success')
+    return redirect(url_for('mural', aba='aniversarios'))
+
+@app.route('/mural/aniversarios/<int:id>/enviar', methods=['POST'])
+@admin_required
+def mural_aniversario_enviar(id):
+    u = User.query.get_or_404(id)
+    if not (u.aniversario_dia and u.aniversario_mes):
+        flash('Cadastre a data de aniversário antes.', 'danger')
+        return redirect(url_for('mural', aba='aniversarios'))
+    r = _aniversario_disparar(u, datetime.now(_BRASIL_TZ).date(), forcar=True)
+    if r and r.status == 'enviado':
+        flash(f'Parabéns enviado no Teams para {u.nome or u.username}.', 'success')
+    else:
+        flash(f'Não foi possível enviar: {(r.erro if r else "tente de novo")}', 'danger')
+    return redirect(url_for('mural', aba='aniversarios'))
+
+@app.route('/mural/aniversarios/testar', methods=['POST'])
+@admin_required
+def mural_aniversarios_testar():
+    eu = User.query.get(session['user_id'])
+    ok, erro = _aniversario_enviar_teams(eu, '🧪 Teste do Gestor Acadêmico — se você está vendo isso, o parabéns automático vai chegar por aqui.')
+    flash('Teste enviado para o Teams.' if ok else f'Falhou: {erro}', 'success' if ok else 'danger')
+    return redirect(url_for('mural', aba='aniversarios'))
+
+def _mural_aniversarios_contexto(u):
+    hoje = datetime.now(_BRASIL_TZ).date()
+    pessoas = User.query.filter(User.ativo.isnot(False)).all()
+    com_data, sem_data = [], []
+    envios = {e.user_id: e for e in AniversarioEnvio.query.filter_by(ano=hoje.year).all()}
+    for p in pessoas:
+        prox = _proximo_aniversario(p, hoje) if (p.aniversario_dia and p.aniversario_mes) else None
+        item = {'u': p, 'prox': prox, 'dias': (prox - hoje).days if prox else None,
+                'hoje': _aniversario_e_hoje(p, hoje), 'envio': envios.get(p.id),
+                'envio_hora': _br(envios[p.id].enviado_em).strftime('%H:%M') if p.id in envios and envios[p.id].enviado_em else '',
+                'data_txt': f'{p.aniversario_dia:02d}/{p.aniversario_mes:02d}' if p.aniversario_dia else '',
+                'data_extenso': f'{p.aniversario_dia} de {MESES_PT[p.aniversario_mes]}' if p.aniversario_dia else ''}
+        (com_data if prox else sem_data).append(item)
+    com_data.sort(key=lambda i: i['dias'])
+    sem_data.sort(key=lambda i: (i['u'].nome or i['u'].username).lower())
+    return {'aniv_lista': com_data, 'aniv_sem_data': sem_data, 'aniv_hoje': hoje,
+            'aniv_webhook_ok': bool(_setting_get('aniversario_teams_webhook').strip()),
+            'aniv_msg_padrao': _setting_get('aniversario_msg_padrao', ANIVERSARIO_MSG_PADRAO),
+            'aniv_hora': ANIVERSARIO_HORA_ENVIO}
 
 @app.route('/mural/nova', methods=['POST'])
 @perm_check('can_view_mural')
@@ -8893,7 +9116,9 @@ def _run_migrations():
                            ("whatsapp_apikey", "VARCHAR(50)"), ("agenda_ics_url", "TEXT"),
                            ("agenda_ics_visibilidade", "VARCHAR(20) DEFAULT 'pessoal'"),
                            ("agenda_cache_json", "TEXT"), ("agenda_cache_em", "TIMESTAMP"),
-                           ("ativo", "BOOLEAN DEFAULT true")]:
+                           ("ativo", "BOOLEAN DEFAULT true"),
+                           ("aniversario_dia", "INTEGER"), ("aniversario_mes", "INTEGER"),
+                           ("aniversario_msg", "TEXT")]:
             try:
                 tbl = '"user"' if is_pg else 'user'
                 sql = f'ALTER TABLE {tbl} ADD COLUMN {col} {dtype}'

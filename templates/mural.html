@@ -13,6 +13,7 @@
     <a href="{{ url_for('mural') }}" class="mural-tab {% if aba == 'publico' %}active{% endif %}">💬 Mural</a>
     <a href="{{ url_for('mural', aba='logs') }}" class="mural-tab {% if aba == 'logs' %}active{% endif %}">📋 Logs</a>
     <a href="{{ url_for('mural', aba='gestor') }}" class="mural-tab {% if aba == 'gestor' %}active{% endif %}" title="Mudanças de disciplina feitas no Gestor">🎓 Gestor</a>
+    <a href="{{ url_for('mural', aba='aniversarios') }}" class="mural-tab {% if aba == 'aniversarios' %}active{% endif %}">🎂 Aniversários</a>
     {% for c in conversas %}
     <a href="{{ url_for('mural', aba=c.id) }}" class="mural-tab {% if contato and contato.id == c.id %}active{% endif %}">🔒 {{ c|nome_exibicao }}</a>
     {% endfor %}
@@ -26,7 +27,94 @@
     </select>
   </div>
 
-  {% if aba in ('logs', 'gestor') %}
+  {% if aba == 'aniversarios' %}
+  {% set hoje_lista = aniv_lista | selectattr('hoje') | list %}
+  {% if hoje_lista %}
+  <div class="card" style="margin-bottom:16px;border-color:var(--primary)">
+    <div class="card-body" style="display:flex;flex-direction:column;gap:6px">
+      {% for i in hoje_lista %}
+      <div style="font-size:15px;font-weight:700">🎉 Hoje é aniversário de {{ i.u|nome_exibicao }}!</div>
+      {% if session.role == 'admin' %}
+      <div style="font-size:12px;color:var(--text-muted)">
+        {% if i.envio and i.envio.status == 'enviado' %}✅ Parabéns enviado no Teams às {{ i.envio_hora }}
+        {% elif i.envio %}⚠️ Não enviado: {{ i.envio.erro }}
+        {% else %}Sai sozinho no Teams a partir das {{ aniv_hora }}h.{% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><div class="card-title">Próximos aniversários</div></div>
+    {% for i in aniv_lista %}
+    <div class="log-linha">
+      <span class="log-origem {% if i.hoje %}log-origem-gestor{% endif %}" style="min-width:70px;text-align:center">{{ 'HOJE' if i.hoje else ('amanhã' if i.dias == 1 else 'em ' ~ i.dias ~ ' dias') }}</span>
+      <div style="flex:1;min-width:0">
+        <strong>{{ i.u|nome_exibicao }}</strong>
+        <span style="font-size:12px;color:var(--text-muted)"> · 🎂 {{ i.data_extenso }}</span>
+      </div>
+      {% if session.role == 'admin' %}
+      <form method="POST" action="{{ url_for('mural_aniversario_enviar', id=i.u.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Enviar agora o parabéns de {{ i.u.username|e }} no Teams?">Enviar agora</button>
+      </form>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:24px">Nenhuma data cadastrada ainda{% if session.role == 'admin' %} — preencha abaixo{% endif %}.</div>
+    {% endfor %}
+  </div>
+
+  {% if session.role == 'admin' %}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><div class="card-title">⚙️ Parabéns automático no Teams (só admin)</div></div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('mural_aniversarios_config') }}" style="display:flex;flex-direction:column;gap:8px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="manter_webhook" value="1">
+        <label style="font-size:12.5px;font-weight:600">Link do Workflow do Teams
+          {% if aniv_webhook_ok %}<span style="color:#16a34a">✓ configurado</span>{% else %}<span style="color:#dc2626">— não configurado</span>{% endif %}</label>
+        <input type="url" name="webhook" maxlength="1000" placeholder="{{ 'Deixe vazio para manter o link atual' if aniv_webhook_ok else 'https://...logic.azure.com/... ou https://...powerplatform.com/...' }}">
+        <label style="font-size:12.5px;font-weight:600">Mensagem padrão <span style="font-weight:400;color:var(--text-muted)">— use {nome} ou {primeiro_nome}; vale pra quem não tiver mensagem própria</span></label>
+        <textarea name="msg_padrao" rows="3" maxlength="2000" style="width:100%;resize:vertical">{{ aniv_msg_padrao }}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button type="submit" class="btn btn-primary">Salvar configuração</button>
+        </div>
+      </form>
+      {% if aniv_webhook_ok %}
+      <form method="POST" action="{{ url_for('mural_aniversarios_testar') }}" style="margin-top:8px;text-align:right">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary">🧪 Enviar teste no Teams</button>
+      </form>
+      {% endif %}
+      <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">
+        No dia, a partir das {{ aniv_hora }}h (Brasília), o parabéns sai sozinho: usa a mensagem colada pra pessoa abaixo ou, se não tiver, a padrão.
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">📅 Datas e mensagens (só admin)</div></div>
+    <form method="POST" action="{{ url_for('mural_aniversarios_salvar') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% for i in (aniv_lista + aniv_sem_data) %}
+      <div class="log-linha" style="flex-wrap:wrap">
+        <div style="flex:0 0 180px;min-width:0;font-weight:600;font-size:13px;padding-top:6px">{{ i.u|nome_exibicao }}</div>
+        <input type="text" name="data_{{ i.u.id }}" value="{{ i.data_txt }}" placeholder="DD/MM" maxlength="5" style="width:80px">
+        <textarea name="msg_{{ i.u.id }}" rows="1" maxlength="2000" style="flex:1;min-width:220px;resize:vertical"
+                  placeholder="Mensagem própria pra este ano (opcional — cole aqui; senão vai a padrão)">{{ i.u.aniversario_msg or '' }}</textarea>
+      </div>
+      {% endfor %}
+      <div class="card-body" style="text-align:right">
+        <button type="submit" class="btn btn-primary">Salvar datas e mensagens</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  {% elif aba in ('logs', 'gestor') %}
   {% set fonte = 'gestor' if aba == 'gestor' else 'externo' %}
   {% if aba == 'gestor' %}
   <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px">
