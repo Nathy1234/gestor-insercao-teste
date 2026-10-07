@@ -121,40 +121,37 @@
     Mudanças de disciplina feitas aqui no Gestor, registradas sozinhas. Se a mesma atualização teve algo feito por fora (planilha, Teams), use <strong>+ Detalhes</strong> na linha dela.
   </div>
   {% endif %}
-  {% if aba == 'logs' and not log_arquivados %}
-  <div class="card" style="margin-bottom:16px">
-    <div class="card-body">
-      <form method="POST" action="{{ url_for('mural_log_novo') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <select name="origem" style="flex:0 0 auto">
-            {% for k, v in log_origens.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
-          </select>
-          <input type="url" name="link" maxlength="500" placeholder="Link da planilha / conversa no Teams (opcional)" style="flex:1;min-width:200px">
-        </div>
-        <textarea name="texto" rows="2" maxlength="2000" required style="width:100%;resize:vertical"
-                  placeholder="O que você atualizou por fora? Ex.: Atualizei a planilha de reembolsos com os pedidos de outubro / Combinado no Teams: entrega do curso X fica pra sexta. Se foi uma disciplina já alterada no Gestor, use o + Detalhes na linha dela, na aba 🎓 Gestor."></textarea>
-        <div style="text-align:right;margin-top:8px">
-          <button type="submit" class="btn btn-primary">Registrar no log</button>
-        </div>
-      </form>
-    </div>
+  {% if aba == 'logs' %}
+  <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px">
+    Atualizações de fora do sistema (Teams, planilhas) chegam aqui automaticamente pelo ChatGPT.
   </div>
+  {% endif %}
+
+  <form method="GET" action="{{ url_for('mural') }}" style="display:flex;gap:6px;margin-bottom:10px">
+    <input type="hidden" name="aba" value="{{ aba }}">
+    {% if log_arquivados %}<input type="hidden" name="arquivados" value="1">{% else %}<input type="hidden" name="dias" value="{{ log_dias }}">{% endif %}
+    <input type="search" name="q" value="{{ log_busca }}" maxlength="200" style="flex:1"
+           placeholder="{{ 'Buscar disciplina, quem alterou ou detalhe…' if aba == 'gestor' else 'Buscar no log: planilha, assunto, pessoa, link…' }}">
+    <button type="submit" class="btn btn-secondary">🔍 Buscar</button>
+    {% if log_busca %}<a href="{{ url_for('mural', aba=aba, arquivados=1) if log_arquivados else url_for('mural', aba=aba, dias=log_dias) }}" class="btn btn-secondary">Limpar</a>{% endif %}
+  </form>
+  {% if log_busca %}
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">{{ log_linhas|length }}{% if log_arquivados and log_paginas > 1 %}+{% endif %} resultado(s) para “{{ log_busca }}”{% if not log_arquivados %} nos últimos {{ log_dias }} dia(s){% else %} nos arquivados{% endif %}.</div>
   {% endif %}
 
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
     <span style="font-size:12.5px;color:var(--text-muted)">Período:</span>
     {% for d in log_periodos %}
-    <a href="{{ url_for('mural', aba=aba, dias=d) }}" class="mural-tab {% if d == log_dias and not log_arquivados %}active{% endif %}" style="padding:4px 10px">{{ 'Hoje' if d == 1 else d ~ ' dias' }}</a>
+    <a href="{{ url_for('mural', aba=aba, dias=d, q=log_busca or None) }}" class="mural-tab {% if d == log_dias and not log_arquivados %}active{% endif %}" style="padding:4px 10px">{{ 'Hoje' if d == 1 else d ~ ' dias' }}</a>
     {% endfor %}
-    <a href="{{ url_for('mural', aba=aba, arquivados=1) }}" class="mural-tab {% if log_arquivados %}active{% endif %}" style="padding:4px 10px" title="Registros com mais de {{ log_dias_ativo }} dias">🗄 Arquivados</a>
+    <a href="{{ url_for('mural', aba=aba, arquivados=1, q=log_busca or None) }}" class="mural-tab {% if log_arquivados %}active{% endif %}" style="padding:4px 10px" title="Registros com mais de {{ log_dias_ativo }} dias">🗄 Arquivados</a>
     <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
       <button type="button" class="btn btn-secondary" onclick="copiarLogChatGPT(this)">📋 Copiar para o ChatGPT</button>
       {% if not log_arquivados %}
-      <a href="{{ url_for('mural_logs_txt', dias=log_dias, fonte=fonte) }}" class="btn btn-secondary">⬇ Baixar .txt</a>
-      <a href="{{ url_for('mural_logs_xlsx', dias=log_dias, fonte=fonte) }}" class="btn btn-secondary">📊 Exportar Excel</a>
+      <a href="{{ url_for('mural_logs_txt', dias=log_dias, fonte=fonte, q=log_busca or None) }}" class="btn btn-secondary">⬇ Baixar .txt</a>
+      <a href="{{ url_for('mural_logs_xlsx', dias=log_dias, fonte=fonte, q=log_busca or None) }}" class="btn btn-secondary">📊 Exportar Excel</a>
       {% else %}
-      <a href="{{ url_for('mural_logs_xlsx', arquivados=1, fonte=fonte) }}" class="btn btn-secondary">📊 Exportar Excel (todos arquivados)</a>
+      <a href="{{ url_for('mural_logs_xlsx', arquivados=1, fonte=fonte, q=log_busca or None) }}" class="btn btn-secondary">📊 Exportar Excel (todos arquivados)</a>
       {% endif %}
     </div>
   </div>
@@ -217,14 +214,14 @@
       {% endif %}
     </div>
     {% else %}
-    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px">{{ 'Nada arquivado ainda.' if log_arquivados else 'Nenhuma atualização nesse período.' }}</div>
+    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px">{{ 'Nada encontrado para essa busca.' if log_busca else ('Nada arquivado ainda.' if log_arquivados else 'Nenhuma atualização nesse período.') }}</div>
     {% endfor %}
   </div>
   {% if log_arquivados and log_paginas > 1 %}
   <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:12px;font-size:12.5px">
-    {% if log_pagina > 1 %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba=aba, arquivados=1, pagina=log_pagina-1) }}">← Mais recentes</a>{% endif %}
+    {% if log_pagina > 1 %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba=aba, arquivados=1, pagina=log_pagina-1, q=log_busca or None) }}">← Mais recentes</a>{% endif %}
     <span style="color:var(--text-muted)">Página {{ log_pagina }} de {{ log_paginas }}</span>
-    {% if log_pagina < log_paginas %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba=aba, arquivados=1, pagina=log_pagina+1) }}">Mais antigos →</a>{% endif %}
+    {% if log_pagina < log_paginas %}<a class="btn btn-sm btn-secondary" href="{{ url_for('mural', aba=aba, arquivados=1, pagina=log_pagina+1, q=log_busca or None) }}">Mais antigos →</a>{% endif %}
   </div>
   {% endif %}
 
