@@ -56,9 +56,6 @@
     </div>
   </div>
   <textarea id="logTextoChatGPT" style="display:none">{{ log_texto }}</textarea>
-  {% if not log_inclui_sistema %}
-  <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px">Mostrando só os registros manuais — as alterações automáticas do sistema aparecem pra quem tem acesso ao Histórico.</div>
-  {% endif %}
 
   <div class="card">
     {% for l in log_linhas %}

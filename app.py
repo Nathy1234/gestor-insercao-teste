@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.22.0'
+VERSAO = '1.22.1'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -5199,28 +5199,17 @@ def _mural_minhas_conversas(meu_id):
 MURAL_LOG_ORIGENS = {'planilha': '📊 Planilha', 'teams': '💼 Teams', 'outro': '📝 Outro'}
 MURAL_LOG_PERIODOS = [1, 7, 30, 90]
 
-def _mural_log_linhas(u, dias):
-    """Linha do tempo da aba Logs: registros manuais (MuralLog) de todo mundo
-    + as alterações automáticas do sistema (AuditLog), mais recente primeiro.
-    O AuditLog só entra pra quem já enxerga o Histórico — mesma regra da tela
-    /historico, pra aba não abrir dado que a pessoa não veria lá."""
+def _mural_log_linhas(dias):
+    """Linha do tempo da aba Logs: só os registros manuais (MuralLog) da
+    equipe — o que foi feito fora do sistema (planilha, Teams etc.). As
+    alterações feitas dentro do sistema ficam no Histórico, não aqui."""
     desde = datetime.utcnow() - timedelta(days=dias)
     linhas = []
     for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.desc()).limit(1000):
         linhas.append({'quando': r.created_at, 'quem': r.autor.username if r.autor else '?',
                        'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
-                       'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id})
-    if u.can_view_historico():
-        for a in AuditLog.query.filter(AuditLog.timestamp >= desde, AuditLog.action != 'login')\
-                .order_by(AuditLog.timestamp.desc()).limit(1000):
-            texto = f'{a.action} {a.entity}' + (f' #{a.entity_id}' if a.entity_id else '')
-            if a.detail:
-                texto += f' — {a.detail}'
-            linhas.append({'quando': a.timestamp, 'quem': a.username or '?', 'origem': 'sistema',
-                           'rotulo': '⚙️ Sistema', 'texto': texto, 'link': None, 'id': None, 'user_id': a.user_id})
-    linhas.sort(key=lambda l: l['quando'] or datetime.min, reverse=True)
-    for l in linhas:
-        l['quando_br'] = l['quando'].replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if l['quando'] else None
+                       'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id,
+                       'quando_br': r.created_at.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if r.created_at else None})
     return linhas
 
 def _mural_log_texto(linhas, dias):
@@ -5230,7 +5219,7 @@ def _mural_log_texto(linhas, dias):
              f'{len(linhas)} registro(s), do mais recente pro mais antigo.', '']
     for l in linhas:
         quando = l['quando_br'].strftime('%d/%m/%Y %H:%M') if l['quando_br'] else '?'
-        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO', 'sistema': 'SISTEMA'}.get(l['origem'], l['origem'])
+        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO'}.get(l['origem'], l['origem'])
         linha = f'[{quando}] {l["quem"]} ({origem}): {l["texto"]}'
         if l['link']:
             linha += f' | link: {l["link"]}'
@@ -5249,12 +5238,11 @@ def mural():
     contato = None
     if aba == 'logs':
         dias = _mural_log_dias()
-        linhas = _mural_log_linhas(u, dias)
+        linhas = _mural_log_linhas(dias)
         return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
                                todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
                                log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
-                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS,
-                               log_inclui_sistema=u.can_view_historico())
+                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS)
     if aba != 'publico':
         contato = User.query.get(aba) if aba.isdigit() else None
         if not contato or contato.id == u.id:
@@ -5333,9 +5321,8 @@ def mural_log_excluir(id):
 @app.route('/mural/logs.txt')
 @perm_check('can_view_mural')
 def mural_logs_txt():
-    u = User.query.get(session['user_id'])
     dias = _mural_log_dias()
-    texto = _mural_log_texto(_mural_log_linhas(u, dias), dias)
+    texto = _mural_log_texto(_mural_log_linhas(dias), dias)
     nome = f'log_equipe_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.txt'
     return Response(texto, mimetype='text/plain; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename={nome}'})
