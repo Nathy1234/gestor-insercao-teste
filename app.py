@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.20.3'
+VERSAO = '1.21.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -870,6 +870,19 @@ class MuralReacao(db.Model):
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (db.UniqueConstraint('mensagem_id', 'user_id', 'emoji', name='uq_reacao'),)
+
+class MuralLog(db.Model):
+    """Registro manual de atualização feito pela equipe na aba Logs do Mural —
+    o que mexeu fora do sistema (planilha, Teams, etc.). Junto com o
+    AuditLog, forma a linha do tempo exportada em texto pro ChatGPT."""
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    origem     = db.Column(db.String(20), default='outro')  # planilha, teams, outro
+    texto      = db.Column(db.Text, nullable=False)
+    link       = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    autor = db.relationship('User', foreign_keys=[user_id])
 
 TIPOS_PERGUNTA_FORMULARIO = ('texto', 'numero', 'escala', 'multipla_escolha', 'sim_nao')
 
@@ -5159,12 +5172,65 @@ def _mural_minhas_conversas(meu_id):
         key=lambda c: ultima_por_contato[c.id], reverse=True
     )
 
+MURAL_LOG_ORIGENS = {'planilha': '📊 Planilha', 'teams': '💼 Teams', 'outro': '📝 Outro'}
+MURAL_LOG_PERIODOS = [1, 7, 30, 90]
+
+def _mural_log_linhas(u, dias):
+    """Linha do tempo da aba Logs: registros manuais (MuralLog) de todo mundo
+    + as alterações automáticas do sistema (AuditLog), mais recente primeiro.
+    O AuditLog só entra pra quem já enxerga o Histórico — mesma regra da tela
+    /historico, pra aba não abrir dado que a pessoa não veria lá."""
+    desde = datetime.utcnow() - timedelta(days=dias)
+    linhas = []
+    for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.desc()).limit(1000):
+        linhas.append({'quando': r.created_at, 'quem': r.autor.username if r.autor else '?',
+                       'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
+                       'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id})
+    if u.can_view_historico():
+        for a in AuditLog.query.filter(AuditLog.timestamp >= desde, AuditLog.action != 'login')\
+                .order_by(AuditLog.timestamp.desc()).limit(1000):
+            texto = f'{a.action} {a.entity}' + (f' #{a.entity_id}' if a.entity_id else '')
+            if a.detail:
+                texto += f' — {a.detail}'
+            linhas.append({'quando': a.timestamp, 'quem': a.username or '?', 'origem': 'sistema',
+                           'rotulo': '⚙️ Sistema', 'texto': texto, 'link': None, 'id': None, 'user_id': a.user_id})
+    linhas.sort(key=lambda l: l['quando'] or datetime.min, reverse=True)
+    for l in linhas:
+        l['quando_br'] = l['quando'].replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if l['quando'] else None
+    return linhas
+
+def _mural_log_texto(linhas, dias):
+    """Versão em texto puro da linha do tempo, pra colar/enviar pro ChatGPT."""
+    agora = datetime.now(_BRASIL_TZ).strftime('%d/%m/%Y %H:%M')
+    saida = [f'LOG DA EQUIPE — últimos {dias} dia(s) — gerado em {agora} (horário de Brasília)',
+             f'{len(linhas)} registro(s), do mais recente pro mais antigo.', '']
+    for l in linhas:
+        quando = l['quando_br'].strftime('%d/%m/%Y %H:%M') if l['quando_br'] else '?'
+        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO', 'sistema': 'SISTEMA'}.get(l['origem'], l['origem'])
+        linha = f'[{quando}] {l["quem"]} ({origem}): {l["texto"]}'
+        if l['link']:
+            linha += f' | link: {l["link"]}'
+        saida.append(linha)
+    return '\n'.join(saida)
+
+def _mural_log_dias():
+    dias = request.args.get('dias', 7, type=int)
+    return dias if dias in MURAL_LOG_PERIODOS else 7
+
 @app.route('/mural')
 @perm_check('can_view_mural')
 def mural():
     u = User.query.get(session['user_id'])
     aba = request.args.get('aba', 'publico')
     contato = None
+    if aba == 'logs':
+        dias = _mural_log_dias()
+        linhas = _mural_log_linhas(u, dias)
+        return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
+                               todos_usuarios=User.query.filter(User.id != u.id).order_by(User.username).all(),
+                               log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
+                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS,
+                               log_inclui_sistema=u.can_view_historico())
     if aba != 'publico':
         contato = User.query.get(aba) if aba.isdigit() else None
         if not contato or contato.id == u.id:
@@ -5209,6 +5275,46 @@ def _notificar_mencao_mural(mensagem):
         f'Acesse o sistema pra ver e responder: '
         f'{request.url_root.rstrip("/")}{url_for("mural", aba=mensagem.user_id)}'
     )
+
+@app.route('/mural/logs/novo', methods=['POST'])
+@perm_check('can_view_mural')
+def mural_log_novo():
+    texto = (request.form.get('texto') or '').strip()
+    origem = request.form.get('origem', 'outro')
+    link = (request.form.get('link') or '').strip()
+    if origem not in MURAL_LOG_ORIGENS:
+        origem = 'outro'
+    if link and not link.lower().startswith(('http://', 'https://')):
+        link = ''  # só link web de verdade — evita javascript: no href
+    if not texto:
+        flash('Descreva o que foi atualizado.', 'danger')
+        return redirect(url_for('mural', aba='logs'))
+    db.session.add(MuralLog(user_id=session['user_id'], origem=origem, texto=texto[:2000], link=link[:500] or None))
+    db.session.commit()
+    flash('Atualização registrada no log.', 'success')
+    return redirect(url_for('mural', aba='logs'))
+
+@app.route('/mural/logs/<int:id>/excluir', methods=['POST'])
+@perm_check('can_view_mural')
+def mural_log_excluir(id):
+    r = MuralLog.query.get_or_404(id)
+    if r.user_id != session['user_id'] and session.get('role') != 'admin':
+        flash('Só quem registrou pode excluir.', 'danger')
+        return redirect(url_for('mural', aba='logs'))
+    db.session.delete(r)
+    db.session.commit()
+    flash('Registro excluído do log.', 'success')
+    return redirect(url_for('mural', aba='logs'))
+
+@app.route('/mural/logs.txt')
+@perm_check('can_view_mural')
+def mural_logs_txt():
+    u = User.query.get(session['user_id'])
+    dias = _mural_log_dias()
+    texto = _mural_log_texto(_mural_log_linhas(u, dias), dias)
+    nome = f'log_equipe_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.txt'
+    return Response(texto, mimetype='text/plain; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename={nome}'})
 
 @app.route('/mural/nova', methods=['POST'])
 @perm_check('can_view_mural')
