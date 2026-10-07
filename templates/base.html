@@ -268,8 +268,19 @@
       🧪 AMBIENTE DE DEMONSTRAÇÃO — dados fictícios, somente visualização. Não é possível criar, editar ou excluir nada aqui.
     </div>
     {% endif %}
-    {% if lembretes_ativos or alertas_demandas_ativos or reunioes_ativas %}
+    {% if lembretes_ativos or alertas_demandas_ativos or reunioes_ativas or aniversarios_aviso %}
     <div id="topAlertBar">
+      {% for a in aniversarios_aviso %}
+      <div class="top-alert top-alert-aniversario">
+        <span class="top-alert-icon">🎂</span>
+        <span class="top-alert-text">
+          {% if a.eu %}<strong>Feliz aniversário, {{ a.primeiro_nome }}!</strong> A equipe toda deseja um dia incrível 🎉
+          {% elif a.quando == 'hoje' %}<strong>Hoje é aniversário de {{ a.nome }}!</strong> Não esqueça de dar os parabéns 🎉
+          {% else %}<strong>Amanhã ({{ a.data }}) é aniversário de {{ a.nome }}</strong> — já se prepara pros parabéns!{% endif %}
+        </span>
+        {% if can_mural %}<a class="top-alert-tag" style="color:#fff" href="{{ url_for('mural', aba='aniversarios') }}">ver aniversários</a>{% endif %}
+      </div>
+      {% endfor %}
       {% for l in lembretes_ativos %}
       <div class="top-alert top-alert-lembrete">
         <span class="top-alert-icon">⏰</span>
@@ -336,7 +347,7 @@
         {% endif %}
         <!-- SINO DE NOTIFICAÇÕES -->
         <div class="notif-wrap">
-          {% set total_badge = (notif_count + admin_finalizado_count + eventos_pendentes_count + solicitacoes_pendentes_count) if session.role == 'admin' else (notif_count + eventos_pendentes_count + solicitacoes_pendentes_count) %}
+          {% set total_badge = ((notif_count + admin_finalizado_count + eventos_pendentes_count + solicitacoes_pendentes_count) if session.role == 'admin' else (notif_count + eventos_pendentes_count + solicitacoes_pendentes_count)) + (aniversarios_aviso|length) %}
           <button class="theme-toggle" id="notifBtn" onclick="toggleNotif(event)" title="Notificações" style="position:relative">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px">
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
@@ -355,6 +366,28 @@
         <div id="notifDropdown" style="display:none;position:fixed;width:360px;
              background:var(--surface);border:1px solid var(--border);border-radius:10px;
              box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:9999;overflow:hidden">
+
+          {% if aniversarios_aviso %}
+          <!-- ── ANIVERSÁRIOS (hoje e amanhã) ── -->
+          <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+            <span style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)">Aniversários</span>
+            <span style="background:#db277720;color:#db2777;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">🎂 {{ aniversarios_aviso|length }}</span>
+          </div>
+          <div style="border-bottom:2px solid var(--border)">
+            {% for a in aniversarios_aviso %}
+            <a href="{{ url_for('mural', aba='aniversarios') if can_mural else '#' }}"
+               style="display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--border);text-decoration:none;color:var(--text)"
+               onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+              <span style="font-size:16px">{{ '🎉' if a.quando == 'hoje' else '🎂' }}</span>
+              <div style="flex:1;min-width:0;font-size:13px">
+                {% if a.eu %}<strong>Feliz aniversário!</strong> Hoje é o seu dia
+                {% else %}<strong>{{ a.nome }}</strong> faz aniversário {{ 'hoje' if a.quando == 'hoje' else 'amanhã (' ~ a.data ~ ')' }}{% endif %}
+              </div>
+              <span style="font-size:10px;font-weight:700;color:#db2777;background:#fce7f3;padding:2px 6px;border-radius:6px;flex-shrink:0">{{ 'HOJE' if a.quando == 'hoje' else 'AMANHÃ' }}</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% endif %}
 
           {% if solicitacoes_pendentes %}
           <!-- ── SOLICITAÇÕES RECEBIDAS PELO FORMULÁRIO ── -->
@@ -655,6 +688,37 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+
+  {% set aniv_hoje = aniversarios_aviso | selectattr('quando', 'equalto', 'hoje') | list %}
+  {% if aniv_hoje %}
+  <div id="anivPopup" class="aniv-popup-fundo" style="display:none" onclick="if(event.target===this) fecharAnivPopup()">
+    <div class="aniv-popup">
+      <div style="font-size:46px;line-height:1">🎉🎂</div>
+      {% for a in aniv_hoje %}
+      {% if a.eu %}
+      <div class="aniv-popup-titulo">Feliz aniversário, {{ a.primeiro_nome }}!</div>
+      <div class="aniv-popup-texto">Toda a equipe deseja um dia incrível e um novo ano cheio de conquistas. Obrigado por fazer parte do time! 💛</div>
+      {% else %}
+      <div class="aniv-popup-titulo">Hoje é aniversário de {{ a.nome }}!</div>
+      <div class="aniv-popup-texto">Aproveita pra mandar os parabéns 🥳</div>
+      {% endif %}
+      {% endfor %}
+      <button type="button" class="btn btn-primary" style="margin-top:14px" onclick="fecharAnivPopup()">{{ 'Obrigada(o)! 💛' if aniv_hoje|selectattr('eu')|list else 'Ok, vou dar os parabéns!' }}</button>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var chave = 'anivPopup_{{ aniv_hoje|map(attribute="id")|join("_") }}_{{ aniv_hoje[0].chave }}';
+      var visto = false;
+      try { visto = localStorage.getItem(chave) === '1'; } catch (e) {}
+      if (!visto) document.getElementById('anivPopup').style.display = 'flex';
+      window.fecharAnivPopup = function() {
+        document.getElementById('anivPopup').style.display = 'none';
+        try { localStorage.setItem(chave, '1'); } catch (e) {}
+      };
+    })();
+  </script>
+  {% endif %}
 </div>
 </body>
 </html>

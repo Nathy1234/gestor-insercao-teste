@@ -224,6 +224,21 @@ body {
   flex-shrink: 0; white-space: nowrap;
 }
 .top-alert-check:hover { background: rgba(255,255,255,.3); }
+.top-alert-aniversario { background: linear-gradient(90deg, #db2777, #f2780d); }
+
+/* ── POP-UP DE ANIVERSÁRIO (no dia, uma vez por navegador) ── */
+.aniv-popup-fundo {
+  position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.55);
+  align-items: center; justify-content: center; padding: 16px;
+}
+.aniv-popup {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 28px 24px; max-width: 420px; width: 100%;
+  text-align: center; animation: anivEntrada .35s ease-out;
+}
+.aniv-popup-titulo { font-size: 20px; font-weight: 800; margin-top: 12px; color: var(--text); }
+.aniv-popup-texto { font-size: 13.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
+@keyframes anivEntrada { from { transform: scale(.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 .topbar {
   display: flex; align-items: center; gap: 12px; padding: 12px 24px;

@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.29.0'
+VERSAO = '1.30.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -1591,6 +1591,7 @@ def inject_notificacoes():
             'can_pagamentos_terceiros': False, 'can_opcoes_curso': False,
             'can_mural': False, 'can_formularios': False, 'can_calendario': False,
             'lembretes_ativos': [], 'alertas_demandas_ativos': [], 'reunioes_ativas': [],
+            'aniversarios_aviso': [],
         }
     # Disciplinas pendentes (plataforma_ok=False) em cursos atribuídos a este usuário
     q = db.session.query(Discipline, Course)\
@@ -1664,6 +1665,7 @@ def inject_notificacoes():
     reunioes_ativas.sort(key=lambda r: (r['dias_para'], r['hora'] or ''))
 
     return {
+        'aniversarios_aviso': _aniversarios_aviso(u),
         'notif_count': len(pendentes),
         'notif_list': notif_list,
         'admin_finalizado': admin_finalizado,
@@ -5820,6 +5822,23 @@ def mural_aniversarios_testar():
     ok, erro = _aniversario_enviar_teams(eu, '🧪 Teste do Gestor Acadêmico — se você está vendo isso, o parabéns automático vai chegar por aqui.')
     flash('Teste enviado para o Teams.' if ok else f'Falhou: {erro}', 'success' if ok else 'danger')
     return redirect(url_for('mural', aba='aniversarios'))
+
+def _aniversarios_aviso(u):
+    """Aniversários de hoje e de amanhã pra barra do topo, o sino e o pop-up
+    — aparecem pra toda a equipe; o próprio aniversariante vê o dele como
+    "Feliz aniversário" e não recebe o aviso de véspera de si mesmo."""
+    hoje = datetime.now(_BRASIL_TZ).date()
+    amanha = hoje + timedelta(days=1)
+    avisos = []
+    for p in User.query.filter(User.aniversario_dia.isnot(None), User.ativo.isnot(False)).all():
+        quando = 'hoje' if _aniversario_e_hoje(p, hoje) else ('amanha' if _aniversario_e_hoje(p, amanha) else None)
+        if not quando or (quando == 'amanha' and p.id == u.id):
+            continue
+        nome = nome_exibicao(p)
+        avisos.append({'id': p.id, 'nome': nome, 'primeiro_nome': nome.split(' ')[0], 'quando': quando,
+                       'eu': p.id == u.id, 'data': f'{p.aniversario_dia:02d}/{p.aniversario_mes:02d}', 'chave': hoje.isoformat()})
+    avisos.sort(key=lambda a: (a['quando'] != 'hoje', a['nome'].lower()))
+    return avisos
 
 def _mural_aniversarios_contexto(u):
     hoje = datetime.now(_BRASIL_TZ).date()
