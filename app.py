@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.22.1'
+VERSAO = '1.23.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -881,6 +881,7 @@ class MuralLog(db.Model):
     origem     = db.Column(db.String(20), default='outro')  # planilha, teams, outro
     texto      = db.Column(db.Text, nullable=False)
     link       = db.Column(db.String(500))
+    audit_id   = db.Column(db.Integer)  # quando é detalhe de uma mudança de disciplina feita no Gestor (AuditLog.id)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     autor = db.relationship('User', foreign_keys=[user_id])
@@ -5199,17 +5200,47 @@ def _mural_minhas_conversas(meu_id):
 MURAL_LOG_ORIGENS = {'planilha': '📊 Planilha', 'teams': '💼 Teams', 'outro': '📝 Outro'}
 MURAL_LOG_PERIODOS = [1, 7, 30, 90]
 
+# Do log do sistema, só mudanças de disciplina entram na aba Logs do Mural —
+# o resto do Gestor fica no Histórico.
+MURAL_LOG_ENTIDADES_GESTOR = ('disciplina_modulo', 'discipline')
+
+def _br(dt):
+    return dt.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if dt else None
+
 def _mural_log_linhas(dias):
-    """Linha do tempo da aba Logs: só os registros manuais (MuralLog) da
-    equipe — o que foi feito fora do sistema (planilha, Teams etc.). As
-    alterações feitas dentro do sistema ficam no Histórico, não aqui."""
+    """Linha do tempo da aba Logs: registros externos da equipe (MuralLog —
+    planilha, Teams etc.) + mudanças de disciplina feitas no Gestor
+    (AuditLog). Pra não repetir a mesma atualização duas vezes, um registro
+    externo pode ser "detalhe" de uma mudança do Gestor (audit_id) — aí ele
+    aparece dentro dessa linha, não como linha separada."""
     desde = datetime.utcnow() - timedelta(days=dias)
     linhas = []
-    for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.desc()).limit(1000):
-        linhas.append({'quando': r.created_at, 'quem': r.autor.username if r.autor else '?',
-                       'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
-                       'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id,
-                       'quando_br': r.created_at.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if r.created_at else None})
+    detalhes_por_audit = {}
+    for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.asc()).limit(2000):
+        item = {'quando': r.created_at, 'quando_br': _br(r.created_at), 'quem': r.autor.username if r.autor else '?',
+                'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
+                'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id, 'detalhes': []}
+        if r.audit_id:
+            detalhes_por_audit.setdefault(r.audit_id, []).append(item)
+        else:
+            linhas.append(item)
+    auditorias = AuditLog.query.filter(
+        db.or_(AuditLog.timestamp >= desde, AuditLog.id.in_(list(detalhes_por_audit) or [0])),
+        AuditLog.entity.in_(MURAL_LOG_ENTIDADES_GESTOR),
+    ).order_by(AuditLog.timestamp.desc()).limit(1000).all()
+    vistos = set()
+    for a in auditorias:
+        vistos.add(a.id)
+        texto = f'{a.action} disciplina' + (f' — {a.detail}' if a.detail else '')
+        linhas.append({'quando': a.timestamp, 'quando_br': _br(a.timestamp), 'quem': a.username or '?',
+                       'origem': 'gestor', 'rotulo': '🎓 Gestor', 'texto': texto, 'link': None,
+                       'id': None, 'audit_id': a.id, 'user_id': a.user_id,
+                       'detalhes': detalhes_por_audit.get(a.id, [])})
+    # detalhe cuja linha do Gestor não existe mais — mostra solto, não some
+    for audit_id, itens in detalhes_por_audit.items():
+        if audit_id not in vistos:
+            linhas.extend(itens)
+    linhas.sort(key=lambda l: l['quando'] or datetime.min, reverse=True)
     return linhas
 
 def _mural_log_texto(linhas, dias):
@@ -5219,11 +5250,16 @@ def _mural_log_texto(linhas, dias):
              f'{len(linhas)} registro(s), do mais recente pro mais antigo.', '']
     for l in linhas:
         quando = l['quando_br'].strftime('%d/%m/%Y %H:%M') if l['quando_br'] else '?'
-        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO'}.get(l['origem'], l['origem'])
+        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO', 'gestor': 'GESTOR'}.get(l['origem'], l['origem'])
         linha = f'[{quando}] {l["quem"]} ({origem}): {l["texto"]}'
         if l['link']:
             linha += f' | link: {l["link"]}'
         saida.append(linha)
+        for d in l.get('detalhes', []):
+            det = f'    ↳ detalhe de {d["quem"]} ({MURAL_LOG_ORIGENS.get(d["origem"], d["origem"])}): {d["texto"]}'
+            if d['link']:
+                det += f' | link: {d["link"]}'
+            saida.append(det)
     return '\n'.join(saida)
 
 def _mural_log_dias():
@@ -5298,10 +5334,16 @@ def mural_log_novo():
         origem = 'outro'
     if link and not link.lower().startswith(('http://', 'https://')):
         link = ''  # só link web de verdade — evita javascript: no href
+    audit_id = request.form.get('audit_id', type=int)
+    if audit_id:
+        a = AuditLog.query.get(audit_id)
+        if not a or a.entity not in MURAL_LOG_ENTIDADES_GESTOR:
+            audit_id = None
     if not texto:
         flash('Descreva o que foi atualizado.', 'danger')
         return redirect(url_for('mural', aba='logs'))
-    db.session.add(MuralLog(user_id=session['user_id'], origem=origem, texto=texto[:2000], link=link[:500] or None))
+    db.session.add(MuralLog(user_id=session['user_id'], origem=origem, texto=texto[:2000], link=link[:500] or None,
+                            audit_id=audit_id))
     db.session.commit()
     flash('Atualização registrada no log.', 'success')
     return redirect(url_for('mural', aba='logs'))
@@ -8572,6 +8614,7 @@ def _run_migrations():
         ("disciplina_modulo", "carga",     "VARCHAR(20)"),
         ("disciplina_modulo", "professor", "VARCHAR(200)"),
         ("disciplina_modulo", "arquivado", "BOOLEAN DEFAULT false"),
+        ("mural_log", "audit_id", "INTEGER"),
     ]
     with db.engine.connect() as conn:
         for table, col, dtype in migrations:
