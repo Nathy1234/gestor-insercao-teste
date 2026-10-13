@@ -1,0 +1,225 @@
+{% extends 'base.html' %}
+{% block title %}Feedbacks — Gestor{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Feedbacks</div>
+      <div class="page-subtitle">{{ ativos|length }} colaborador(es) ativo(s) · {{ total }} feedback(s) registrados · visível só para administradores</div>
+    </div>
+    <div class="fb-acoes">
+      <a href="{{ url_for('feedback_importar') }}" class="btn btn-secondary">Importar do Trello</a>
+      <a href="{{ url_for('feedback_modelos') }}" class="btn btn-secondary">Modelos e frases</a>
+      <a href="{{ url_for('feedback_novo') }}" class="btn btn-primary">+ Novo feedback</a>
+    </div>
+  </div>
+
+  <div class="fb-tabs">
+    {% for chave, rotulo in [('colaboradores','Colaboradores'),('mensal','Painel mensal'),('trimestral','Painel trimestral'),('todos','Todos os feedbacks')] %}
+    <a href="{{ url_for('feedbacks', aba=chave) }}" class="fb-tab {% if aba == chave %}ativo{% endif %}">{{ rotulo }}</a>
+    {% endfor %}
+  </div>
+
+  {% if not colaboradores %}
+  <div class="fb-aviso" style="margin-bottom:16px">
+    Nenhum colaborador cadastrado ainda. Comece <a href="{{ url_for('feedback_importar') }}">importando o quadro do Trello</a>
+    ou <a href="{{ url_for('feedback_colaborador_novo') }}">cadastre um colaborador</a>.
+  </div>
+  {% endif %}
+
+  {# ───────────────────────── COLABORADORES ───────────────────────── #}
+  {% if aba == 'colaboradores' %}
+  <div class="fb-grid-colab">
+    {% for c in ativos %}
+    {% set fbs = por_colab.get(c.id, []) %}
+    {% set ultimo = fbs|first if fbs else None %}
+    {% set mensal_ant = fbs|selectattr('tipo','equalto','mensal')|selectattr('ano_ref','equalto',ref.ano_mes)|selectattr('mes_ref','equalto',ref.mes)|list %}
+    {% set tri_ant = fbs|selectattr('tipo','equalto','trimestral')|selectattr('ano_ref','equalto',ref.ano_tri)|selectattr('trimestre_ref','equalto',ref.tri)|list %}
+    <div class="fb-colab-card">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+        <div>
+          <a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="fb-colab-nome" style="color:var(--text);text-decoration:none">{{ c.nome }}</a>
+          <div class="fb-muted">{{ c.vinculo or 'Colaborador' }}{% if c.contratado_em %} · desde {{ c.contratado_em.strftime('%d/%m/%Y') }}{% endif %}</div>
+        </div>
+        <span class="fb-tag">{{ fbs|length }} feedback(s)</span>
+      </div>
+      {% if not c.email %}<div class="fb-muted" style="color:var(--warning)">Sem e-mail cadastrado</div>{% endif %}
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="fb-tag {{ 'enviado' if mensal_ant and mensal_ant[0].enviado else ('misto' if mensal_ant else 'pendente') }}"
+              title="Feedback mensal de {{ meses_nome[ref.mes-1] }}">
+          Mensal {{ meses_nome[ref.mes-1][:3] }}: {{ 'enviado' if mensal_ant and mensal_ant[0].enviado else ('registrado' if mensal_ant else 'pendente') }}
+        </span>
+        <span class="fb-tag {{ 'enviado' if tri_ant and tri_ant[0].enviado else ('misto' if tri_ant else 'pendente') }}"
+              title="Trimestral (opcional)">
+          {{ ref.tri }}º tri: {{ 'enviado' if tri_ant and tri_ant[0].enviado else ('registrado' if tri_ant else '—') }}
+        </span>
+      </div>
+      {% if ultimo %}
+      <a href="{{ url_for('feedback_ver', id=ultimo.id) }}" class="fb-muted" style="text-decoration:none">
+        Último: <strong style="color:var(--text)">{{ ultimo.titulo|truncate(60) }}</strong>
+        {% if ultimo.data %}· {{ ultimo.data.strftime('%d/%m/%Y') }}{% endif %}
+      </a>
+      {% else %}<div class="fb-muted">Nenhum feedback ainda.</div>{% endif %}
+      <div class="fb-acoes" style="margin-top:auto">
+        <a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="btn btn-secondary btn-sm">Histórico</a>
+        <a href="{{ url_for('feedback_novo', colaborador=c.id, tipo='mensal') }}" class="btn btn-primary btn-sm">+ Feedback</a>
+      </div>
+    </div>
+    {% endfor %}
+    <a href="{{ url_for('feedback_colaborador_novo') }}" class="fb-colab-card" style="align-items:center;justify-content:center;text-decoration:none;border-style:dashed;color:var(--text-muted);min-height:140px">
+      + Cadastrar colaborador
+    </a>
+  </div>
+
+  {% set inativos = colaboradores|rejectattr('ativo')|selectattr('categoria','equalto','colaborador')|list %}
+  {% set equipe = colaboradores|selectattr('categoria','equalto','equipe')|list %}
+  {% if equipe %}
+  <div class="section-label" style="margin-top:26px">Registros gerais da equipe</div>
+  <div class="card"><div class="card-body" style="padding:6px 14px">
+    <table class="fb-tabela">
+      {% for c in equipe %}
+      <tr>
+        <td><a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="td-link"><strong>{{ c.nome }}</strong></a></td>
+        <td class="fb-muted">{{ por_colab.get(c.id, [])|length }} registro(s)</td>
+        <td class="fb-muted">{{ 'ativo' if c.ativo else 'arquivado' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div></div>
+  {% endif %}
+  {% if inativos %}
+  <details style="margin-top:22px">
+    <summary class="section-label" style="cursor:pointer">Ex-colaboradores / inativos ({{ inativos|length }})</summary>
+    <div class="card" style="margin-top:8px"><div class="card-body" style="padding:6px 14px">
+      <table class="fb-tabela">
+        {% for c in inativos %}
+        <tr>
+          <td><a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="td-link"><strong>{{ c.nome }}</strong></a></td>
+          <td class="fb-muted">{{ c.trello_lista or '' }}</td>
+          <td class="fb-muted">{{ por_colab.get(c.id, [])|length }} feedback(s)</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div></div>
+  </details>
+  {% endif %}
+
+  {# ───────────────────────── PAINEL MENSAL ───────────────────────── #}
+  {% elif aba == 'mensal' %}
+  <div class="card"><div class="table-wrapper">
+    <table class="fb-tabela" style="min-width:900px">
+      <thead><tr>
+        <th>Colaborador</th>
+        {% for ano, mes in meses %}<th class="fb-cel">{{ meses_nome[mes-1][:3] }}<br><span style="font-weight:400">{{ ano }}</span></th>{% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for c in ativos %}
+      <tr>
+        <td><a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="td-link"><strong>{{ c.nome }}</strong></a></td>
+        {% for ano, mes in meses %}
+        {% set itens = grade.get((c.id, ano, mes), []) %}
+        <td class="fb-cel">
+          {% if itens %}
+            {% set f = itens[0] %}
+            <a href="{{ url_for('feedback_ver', id=f.id) }}" class="{{ 'ok' if f.enviado else 'reg' }}"
+               title="{{ f.titulo }} — {{ 'enviado' if f.enviado else 'registrado, não enviado' }}{% if itens|length > 1 %} (+{{ itens|length - 1 }}){% endif %}">{{ '✓' if f.enviado else '●' }}</a>
+          {% else %}
+            <a href="{{ url_for('feedback_novo', colaborador=c.id, tipo='mensal', mes=mes, ano=ano) }}" class="novo" title="Criar feedback mensal de {{ meses_nome[mes-1] }}/{{ ano }}">+</a>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+  <div class="fb-legenda"><span>✓ enviado</span><span>● registrado (ainda não enviado)</span><span>+ criar</span>
+    <span>Feedbacks mensais com mês de referência definido. Os importados do Trello tiveram o mês deduzido pelo título/data — ajuste em "Editar" se precisar.</span></div>
+
+  {# ───────────────────────── PAINEL TRIMESTRAL ───────────────────────── #}
+  {% elif aba == 'trimestral' %}
+  <div class="fb-aviso" style="margin-bottom:14px">
+    O trimestral fica <strong>registrado</strong> aqui, mas o envio pelo Gestor é <strong>opcional</strong> — se ele foi entregue de outra forma
+    (e-mail próprio, Teams, reunião), use “Registrar entrega por outro meio” dentro do feedback.
+  </div>
+  <div class="card"><div class="table-wrapper">
+    <table class="fb-tabela" style="min-width:700px">
+      <thead><tr>
+        <th>Colaborador</th>
+        {% for ano, tri in trimestres %}<th class="fb-cel">{{ tri }}º tri<br><span style="font-weight:400">{{ ano }}</span></th>{% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for c in ativos %}
+      <tr>
+        <td><a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="td-link"><strong>{{ c.nome }}</strong></a></td>
+        {% for ano, tri in trimestres %}
+        {% set itens = grade.get((c.id, ano, tri), []) %}
+        <td class="fb-cel">
+          {% if itens %}
+            {% set f = itens[0] %}
+            <a href="{{ url_for('feedback_ver', id=f.id) }}" class="{{ 'ok' if f.enviado else 'reg' }}"
+               title="{{ f.titulo }} — {{ ('entregue: ' ~ canais.get(f.enviado_canal, '')) if f.enviado else 'registrado' }}">{{ '✓' if f.enviado else '●' }}</a>
+          {% else %}
+            <a href="{{ url_for('feedback_novo', colaborador=c.id, tipo='trimestral', trimestre=tri, ano=ano) }}" class="novo" title="Registrar trimestral {{ tri }}º/{{ ano }}">+</a>
+          {% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+  <div class="fb-legenda"><span>✓ entregue (Gestor ou outro meio)</span><span>● registrado</span><span>+ registrar</span></div>
+
+  {# ───────────────────────── TODOS ───────────────────────── #}
+  {% else %}
+  <form method="GET" class="filters" style="margin-bottom:14px">
+    <input type="hidden" name="aba" value="todos">
+    <input type="text" name="q" value="{{ q }}" placeholder="Buscar no título ou no texto..." class="filter-select" style="width:240px">
+    <select name="colaborador" class="filter-select" onchange="this.form.submit()">
+      <option value="">Todos os colaboradores</option>
+      {% for c in colaboradores %}<option value="{{ c.id }}" {% if f_colab == c.id %}selected{% endif %}>{{ c.nome }}</option>{% endfor %}
+    </select>
+    <select name="tipo" class="filter-select" onchange="this.form.submit()">
+      <option value="">Todos os tipos</option>
+      {% for k, v in tipos %}<option value="{{ k }}" {% if f_tipo == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+    </select>
+    <select name="tom" class="filter-select" onchange="this.form.submit()">
+      <option value="">Positivo e melhoria</option>
+      {% for k, v in tons %}<option value="{{ k }}" {% if f_tom == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+    </select>
+    <select name="envio" class="filter-select" onchange="this.form.submit()">
+      <option value="">Enviados e não enviados</option>
+      <option value="enviado" {% if f_envio == 'enviado' %}selected{% endif %}>Enviados</option>
+      <option value="nao_enviado" {% if f_envio == 'nao_enviado' %}selected{% endif %}>Não enviados</option>
+    </select>
+    <label class="fb-muted" style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" name="arquivados" value="1" {% if f_arq %}checked{% endif %} onchange="this.form.submit()"> incluir arquivados
+    </label>
+    <button type="submit" class="btn btn-secondary">Filtrar</button>
+  </form>
+  <div class="card"><div class="table-wrapper">
+    <table class="fb-tabela" style="min-width:900px">
+      <thead><tr><th>Data</th><th>Colaborador</th><th>Título</th><th>Tipo</th><th>Período</th><th>Tom</th><th>Envio</th></tr></thead>
+      <tbody>
+      {% for f in lista %}
+      <tr {% if f.arquivado %}style="opacity:.55"{% endif %}>
+        <td style="white-space:nowrap">{{ f.data.strftime('%d/%m/%Y') if f.data else '—' }}</td>
+        <td><a href="{{ url_for('feedback_colaborador', id=f.colaborador_id) }}" class="td-link">{{ f.colaborador.nome }}</a></td>
+        <td><a href="{{ url_for('feedback_ver', id=f.id) }}" class="td-link"><strong>{{ f.titulo }}</strong></a>
+          {% if f.origem == 'trello' %}<span class="fb-tag trello">Trello</span>{% endif %}</td>
+        <td>{{ dict(tipos)[f.tipo] if f.tipo in dict(tipos) else f.tipo }}</td>
+        <td style="white-space:nowrap">{{ f.periodo_label }}</td>
+        <td><span class="fb-tag {{ f.tom }}">{{ dict(tons).get(f.tom, f.tom) }}</span></td>
+        <td>{% if f.enviado %}<span class="fb-tag enviado">✓ {{ canais.get(f.enviado_canal, 'enviado') }}</span>{% else %}<span class="fb-tag pendente">não enviado</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="fb-muted" style="text-align:center;padding:24px">Nenhum feedback encontrado.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div></div>
+  {% endif %}
+</div>
+{% endblock %}

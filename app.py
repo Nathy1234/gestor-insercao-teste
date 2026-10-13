@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.30.0'
+VERSAO = '1.31.0'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -904,6 +904,105 @@ class AniversarioEnvio(db.Model):
 
     __table_args__ = (db.UniqueConstraint('user_id', 'ano', name='uq_aniversario_ano'),)
 
+# ─── FEEDBACKS (só admin) ──────────────────────────────────────────────────────
+# Substitui o quadro "Meu controle - inserção" do Trello: cada lista de lá
+# virou um FeedbackColaborador (nome exatamente como estava no card do
+# Trello) e cada card de feedback virou um Feedback. Dado sensível de RH —
+# nada daqui vai pro AuditLog/Histórico (que não-admins enxergam).
+
+FEEDBACK_TIPOS = [('mensal', 'Mensal'), ('trimestral', 'Trimestral'),
+                  ('semanal', 'Semanal'), ('avulso', 'Avulso / geral')]
+FEEDBACK_TONS = [('positivo', 'Positivo'), ('melhoria', 'Pontos de melhoria'),
+                 ('misto', 'Positivo + melhorias')]
+FEEDBACK_CANAIS = [('gestor', 'E-mail pelo Gestor'), ('email', 'E-mail (Outlook/próprio)'),
+                   ('teams', 'Teams'), ('reuniao', 'Reunião / 1:1'), ('outro', 'Outro')]
+FB_MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
+            'agosto', 'setembro', 'outubro', 'novembro', 'dezembro']
+
+class FeedbackColaborador(db.Model):
+    id              = db.Column(db.Integer, primary_key=True)
+    nome            = db.Column(db.String(200), nullable=False)  # exatamente como no card do Trello (ex: "JUNIOR")
+    nome_tratamento = db.Column(db.String(200))  # como chamar no e-mail (ex: "Junior")
+    email           = db.Column(db.String(200))
+    usuario_id      = db.Column(db.Integer, db.ForeignKey('user.id'))  # conta no Gestor, se tiver
+    categoria       = db.Column(db.String(20), default='colaborador')  # colaborador | equipe (registros gerais)
+    vinculo         = db.Column(db.String(50))   # CLT, Estágio...
+    contratado_em   = db.Column(db.Date)
+    trello_lista    = db.Column(db.String(300))  # nome da lista no Trello, exatamente como estava
+    trello_list_id  = db.Column(db.String(40), unique=True)
+    perfil          = db.Column(db.Text)  # descrição do card do colaborador (responsabilidades, horários...)
+    ativo           = db.Column(db.Boolean, default=True)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+
+    usuario = db.relationship('User', foreign_keys=[usuario_id])
+
+    @property
+    def nome_email(self):
+        return (self.nome_tratamento or '').strip() or (self.nome or '').strip().title()
+
+class Feedback(db.Model):
+    id             = db.Column(db.Integer, primary_key=True)
+    colaborador_id = db.Column(db.Integer, db.ForeignKey('feedback_colaborador.id'), nullable=False, index=True)
+    titulo         = db.Column(db.String(400), nullable=False)  # importados: nome do card no Trello, sem alteração
+    tipo           = db.Column(db.String(20), default='mensal')
+    tom            = db.Column(db.String(20), default='misto')
+    data           = db.Column(db.Date)  # data da conversa/feedback
+    ano_ref        = db.Column(db.Integer)
+    mes_ref        = db.Column(db.Integer)  # mensal
+    trimestre_ref  = db.Column(db.Integer)  # trimestral
+    assunto        = db.Column(db.String(400))
+    conteudo       = db.Column(db.Text)  # markdown simples (**negrito**, ### título, - lista)
+    enviado        = db.Column(db.Boolean, default=False)
+    enviado_em     = db.Column(db.DateTime)
+    enviado_canal  = db.Column(db.String(20))
+    enviado_para   = db.Column(db.String(500))
+    registro_extra = db.Column(db.Text)  # checklists, comentários e anexos vindos do Trello
+    arquivado      = db.Column(db.Boolean, default=False)
+    origem         = db.Column(db.String(20), default='gestor')  # gestor | trello
+    trello_card_id = db.Column(db.String(40), unique=True)
+    criado_por     = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow)
+
+    colaborador = db.relationship('FeedbackColaborador', backref=db.backref('feedbacks', lazy='dynamic'))
+
+    @property
+    def periodo_label(self):
+        if self.tipo == 'trimestral' and self.trimestre_ref and self.ano_ref:
+            return f'{self.trimestre_ref}º trimestre/{self.ano_ref}'
+        if self.mes_ref and self.ano_ref:
+            return f'{FB_MESES[self.mes_ref - 1].capitalize()}/{self.ano_ref}'
+        return self.data.strftime('%d/%m/%Y') if self.data else '—'
+
+class FeedbackObservacao(db.Model):
+    """Anotação solta sobre a evolução do colaborador entre um feedback e
+    outro — vira matéria-prima pro próximo feedback (botão "puxar")."""
+    id             = db.Column(db.Integer, primary_key=True)
+    colaborador_id = db.Column(db.Integer, db.ForeignKey('feedback_colaborador.id'), nullable=False, index=True)
+    feedback_id    = db.Column(db.Integer, db.ForeignKey('feedback.id'))  # feedback/plano de ação a que se refere
+    tom            = db.Column(db.String(20), default='neutro')  # positivo | melhoria | neutro
+    texto          = db.Column(db.Text, nullable=False)
+    data           = db.Column(db.Date, default=date.today)
+    autor_id       = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+
+    colaborador = db.relationship('FeedbackColaborador', backref=db.backref('observacoes', lazy='dynamic'))
+    feedback = db.relationship('Feedback', backref=db.backref('observacoes', lazy='dynamic'))
+
+class FeedbackModelo(db.Model):
+    """Modelo de e-mail (tipo='modelo') ou frase sugerida (tipo='frase').
+    Aceita marcadores {nome}, {periodo}, {mes}, {ano}, {trimestre}, {meses_trimestre}."""
+    id         = db.Column(db.Integer, primary_key=True)
+    tipo       = db.Column(db.String(10), default='modelo')
+    nome       = db.Column(db.String(200), nullable=False)
+    feedback_tipo = db.Column(db.String(20))  # mensal | trimestral | vazio = qualquer
+    tom        = db.Column(db.String(20))     # positivo | melhoria | misto
+    grupo      = db.Column(db.String(100))    # frases: Desempenho, Qualidade, Direcionamentos...
+    assunto    = db.Column(db.String(400))
+    corpo      = db.Column(db.Text)
+    ordem      = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 TIPOS_PERGUNTA_FORMULARIO = ('texto', 'numero', 'escala', 'multipla_escolha', 'sim_nao')
 
 class Formulario(db.Model):
@@ -1430,7 +1529,8 @@ def _resumo_mudancas(antes, depois, labels):
     return '; '.join(partes)
 
 BACKUP_MODELOS = [User, Course, Discipline, AuditLog, Coupon, Refund, ThirdPartyPayment, ErpMoodleItem,
-                  Formulario, FormularioPergunta, FormularioResposta, FormularioRespostaItem]
+                  Formulario, FormularioPergunta, FormularioResposta, FormularioRespostaItem,
+                  FeedbackColaborador, Feedback, FeedbackObservacao, FeedbackModelo]
 
 def _serializar_valor(v):
     if isinstance(v, (datetime, date)):
@@ -9365,6 +9465,1005 @@ def sem_cache_paginas_dinamicas(response):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
     return response
+
+# ─── FEEDBACKS (Gestão → Feedbacks, só admin) ─────────────────────────────────
+
+_FB_RE_TITULO = _re.compile(r'^(#{1,6})\s+(.*)$')
+_FB_RE_BULLET = _re.compile(r'^(\s*)[-*+•]\s+(.*)$')
+_FB_RE_NUM    = _re.compile(r'^(\s*)(\d+)[.)]\s+(.*)$')
+
+def _fb_inline(texto):
+    return _aplica_negrito(str(escape(texto)))
+
+def _fb_md_html(texto, para_email=False):
+    """Converte o markdown simples usado nos feedbacks (o mesmo do Trello:
+    ### título, **negrito**, listas com - e 1., ---) em HTML com estilo
+    inline — assim o mesmo HTML serve pra tela, pro e-mail e pra área de
+    transferência (colar no Outlook mantendo a formatação). Todo texto é
+    escapado antes de virar tag."""
+    if not texto:
+        return Markup('')
+    cor = 'color:#1f2328;' if para_email else ''
+    blocos, paragrafo, lista = [], [], {'tipo': None, 'itens': [], 'inicio': 1}
+
+    def fecha_paragrafo():
+        if paragrafo:
+            blocos.append(f'<p style="margin:0 0 10px;{cor}">' + '<br>'.join(paragrafo) + '</p>')
+            paragrafo.clear()
+
+    def fecha_lista():
+        if lista['tipo']:
+            tag = lista['tipo']
+            inicio = f' start="{lista["inicio"]}"' if tag == 'ol' and lista['inicio'] != 1 else ''
+            blocos.append(f'<{tag}{inicio} style="margin:0 0 10px;padding-left:22px;{cor}">'
+                          + ''.join(lista['itens']) + f'</{tag}>')
+            lista.update(tipo=None, itens=[], inicio=1)
+
+    for bruta in texto.replace('\r\n', '\n').replace('\r', '\n').split('\n'):
+        linha = bruta.rstrip()
+        s = linha.strip()
+        if not s:
+            fecha_paragrafo(); fecha_lista()
+            continue
+        m_t = _FB_RE_TITULO.match(s)
+        m_b = _FB_RE_BULLET.match(linha)
+        m_n = _FB_RE_NUM.match(linha)
+        if s in ('---', '***', '___'):
+            fecha_paragrafo(); fecha_lista()
+            blocos.append('<hr style="border:0;border-top:1px solid #d0d7de;margin:14px 0">')
+        elif m_t:
+            fecha_paragrafo(); fecha_lista()
+            tam = {1: 18, 2: 16}.get(len(m_t.group(1)), 15)
+            conteudo = m_t.group(2).replace('**', '')
+            blocos.append(f'<p style="margin:16px 0 6px;font-size:{tam}px;font-weight:700;{cor}">{escape(conteudo)}</p>')
+        elif m_b or m_n:
+            fecha_paragrafo()
+            tipo = 'ul' if m_b else 'ol'
+            if lista['tipo'] != tipo:
+                fecha_lista()
+                lista['tipo'] = tipo
+                if m_n:
+                    lista['inicio'] = int(m_n.group(2))
+            recuo = len((m_b or m_n).group(1))
+            item = m_b.group(2) if m_b else m_n.group(3)
+            margem = f'margin-left:{min(recuo // 2, 3) * 16}px;' if recuo >= 2 else ''
+            lista['itens'].append(f'<li style="margin:0 0 4px;{margem}">{_fb_inline(item)}</li>')
+        else:
+            fecha_lista()
+            paragrafo.append(_fb_inline(s))
+    fecha_paragrafo(); fecha_lista()
+    corpo = ''.join(blocos)
+    if para_email:
+        corpo = ('<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.55;color:#1f2328">'
+                 + corpo + '</div>')
+    return Markup(corpo)
+
+def _fb_md_texto(texto):
+    """Versão texto puro (sem ** e #) — pro corpo alternativo do e-mail e
+    pro botão "copiar texto simples"."""
+    linhas = []
+    for linha in (texto or '').replace('\r\n', '\n').split('\n'):
+        s = linha.rstrip()
+        m_t = _FB_RE_TITULO.match(s.strip())
+        if m_t:
+            s = m_t.group(2)
+        s = s.replace('**', '')
+        m_b = _FB_RE_BULLET.match(s)
+        if m_b:
+            s = m_b.group(1) + '• ' + m_b.group(2)
+        linhas.append(s)
+    return '\n'.join(linhas).strip()
+
+app.add_template_filter(_fb_md_html, 'feedback_md')
+
+def _fb_periodo_textos(tipo, ano, mes, trimestre):
+    """Valores dos marcadores {periodo}, {mes}, {ano}, {trimestre}, {meses_trimestre}."""
+    mes_nome = FB_MESES[mes - 1] if mes else ''
+    meses_tri = ''
+    if trimestre:
+        nomes = FB_MESES[(trimestre - 1) * 3:(trimestre - 1) * 3 + 3]
+        meses_tri = f'{nomes[0]}, {nomes[1]} e {nomes[2]}'
+    if tipo == 'trimestral' and trimestre:
+        periodo = f'{trimestre}º trimestre' + (f' de {ano}' if ano else '') + f' ({meses_tri})'
+    elif mes:
+        periodo = f'{mes_nome} de {ano}' if ano else mes_nome
+    else:
+        periodo = str(ano or '')
+    return {'periodo': periodo, 'mes': mes_nome, 'ano': str(ano or ''),
+            'trimestre': f'{trimestre}º' if trimestre else '', 'meses_trimestre': meses_tri}
+
+def _fb_aplicar_marcadores(texto, colaborador, tipo, ano, mes, trimestre):
+    if not texto:
+        return texto
+    valores = _fb_periodo_textos(tipo, ano, mes, trimestre)
+    valores['nome'] = colaborador.nome_email if colaborador else ''
+    for chave, valor in valores.items():
+        texto = texto.replace('{' + chave + '}', valor)
+    return texto
+
+def _fb_trimestre_de(mes):
+    return (mes - 1) // 3 + 1 if mes else None
+
+def enviar_email_html(destinatarios, assunto, texto, html, cc=None, reply_to=None):
+    """E-mail com versão HTML (formatação do feedback) + texto puro, com
+    cópia e responder-para — usado no envio de feedback. Mesmo esquema de
+    simulação no console do enviar_email quando o SMTP não está configurado."""
+    destinatarios = [d for d in destinatarios if d]
+    cc = [c for c in (cc or []) if c]
+    if not destinatarios:
+        return False
+    if not (EMAIL_SMTP_USER and EMAIL_SMTP_PASSWORD):
+        print(f'[EMAIL SIMULADO — EMAIL_SMTP_USER/PASSWORD não configurados]\n'
+              f'Para: {", ".join(destinatarios)}\nCc: {", ".join(cc)}\nResponder para: {reply_to}\n'
+              f'Assunto: {assunto}\n\n{texto}\n')
+        return True
+    try:
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = assunto
+        msg['From'] = f'Gestor Acadêmico <{EMAIL_SMTP_USER}>'
+        msg['To'] = ', '.join(destinatarios)
+        if cc:
+            msg['Cc'] = ', '.join(cc)
+        if reply_to:
+            msg['Reply-To'] = reply_to
+        msg.attach(MIMEText(texto, 'plain', 'utf-8'))
+        msg.attach(MIMEText(html, 'html', 'utf-8'))
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
+            server.starttls()
+            server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.sendmail(EMAIL_SMTP_USER, destinatarios + cc, msg.as_string())
+        return True
+    except Exception as e:
+        print(f'[ERRO EMAIL] {e}')
+        return False
+
+_FB_RE_EMAIL = _re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
+
+def _fb_lista_emails(texto):
+    """'a@x.com; b@y.com' → (válidos, inválidos)."""
+    partes = [p.strip() for p in _re.split(r'[,;\s]+', texto or '') if p.strip()]
+    return [p for p in partes if _FB_RE_EMAIL.match(p)], [p for p in partes if not _FB_RE_EMAIL.match(p)]
+
+# ── Modelos e frases sugeridas (criados uma vez; depois o admin edita à vontade)
+
+_FB_MODELOS_PADRAO = [
+    dict(nome='Mensal 1:1 — Positivo', feedback_tipo='mensal', tom='positivo',
+         assunto='Feedback 1:1 — {periodo} — {nome}',
+         corpo='Olá, {nome}.\n\n'
+               'Conforme conversamos na reunião de feedback 1:1, segue o resumo do seu desempenho referente a {mes}.\n\n'
+               '**Principais entregas do período**\n\n'
+               '- \n- \n- \n\n'
+               '**Destaques do mês**\n\n'
+               '- \n- \n\n'
+               '**Indicadores**\n\n'
+               'Atingimento da meta: **__%**. Retornos de qualidade/curadoria no período: **0**.\n\n'
+               'De forma geral, o mês foi muito positivo. A expectativa é que continue mantendo essa evolução e constância nos próximos meses.\n\n'
+               'Atenciosamente,'),
+    dict(nome='Mensal 1:1 — Pontos de melhoria e plano de ação', feedback_tipo='mensal', tom='melhoria',
+         assunto='Feedback 1:1 — {periodo} — {nome}',
+         corpo='Olá, {nome}.\n\n'
+               'Conforme conversamos na reunião de feedback 1:1, segue o resumo do seu desempenho referente a {mes}.\n\n'
+               '**Principais entregas do período**\n\n'
+               '- \n- \n\n'
+               '**Retorno e ponto de atenção de {mes}**\n\n'
+               'Descreva a ocorrência, o impacto e o indicador relacionado.\n\n'
+               '**Acompanhamento do plano de ação**\n\n'
+               '1. **Ponto 1**\n\n'
+               'O que foi observado no período.\n\n'
+               '**Status:** em desenvolvimento.\n\n'
+               '2. **Ponto 2**\n\n'
+               'O que foi observado no período.\n\n'
+               '**Status:** em acompanhamento.\n\n'
+               '**Direcionamentos para o próximo mês**\n\n'
+               '- \n- \n- \n\n'
+               'Conto com seu comprometimento para manter os avanços e evoluir nos pontos acima.\n\n'
+               'Atenciosamente,'),
+    dict(nome='Trimestral — Positivo', feedback_tipo='trimestral', tom='positivo',
+         assunto='Feedback trimestral — {periodo} — {nome}',
+         corpo='Prezados,\n\n'
+               'Compartilho o feedback referente ao {trimestre} trimestre ({meses_trimestre}) do(a) colaborador(a) **{nome} – Inserção**.\n\n'
+               '### Resumo de Performance do Trimestre:\n\n'
+               'Média trimestral de atingimento: **__%**.\n\n'
+               '- Mês 1: **__%**\n- Mês 2: **__%**\n- Mês 3: **__%**\n\n'
+               '__ disciplinas inseridas/atualizadas no período. __ demandas atendidas. __ erros, __ retornos de Curadoria e __ retrabalhos.\n\n'
+               '### Indicadores com 100% de cumprimento:\n\n'
+               '- Registro correto de ponto.\n- Meta diária de inserções e atualizações.\n- Ajustes realizados dentro do prazo estabelecido.\n\n'
+               '---\n\n'
+               '### Feedback:\n\n'
+               '{nome} apresentou constância, responsabilidade e atenção aos detalhes durante todo o trimestre.\n\n'
+               'Como evolução natural para os próximos ciclos, o foco estará em ...\n\n'
+               'No geral, foi um trimestre muito positivo, com desempenho dentro da meta e excelente padrão de entrega.\n\n'
+               'Atenciosamente,'),
+    dict(nome='Trimestral — Desenvolvimento e plano de ação', feedback_tipo='trimestral', tom='melhoria',
+         assunto='Feedback trimestral — {periodo} — {nome}',
+         corpo='Prezados,\n\n'
+               'Compartilho o feedback referente ao {trimestre} trimestre ({meses_trimestre}) do(a) colaborador(a) **{nome} – Inserção**.\n\n'
+               '### Resumo de Performance do Trimestre:\n\n'
+               'Média trimestral de atingimento: **__%**.\n\n'
+               '### Pontos positivos:\n\n- \n- \n\n'
+               '### Pontos de desenvolvimento:\n\n- \n- \n\n'
+               '---\n\n'
+               '### Plano de ação para o próximo trimestre:\n\n'
+               '1. **Conferência e atenção aos detalhes** — \n'
+               '2. **Organização e acompanhamento das demandas** — \n'
+               '3. **Autonomia e planejamento da rotina** — \n\n'
+               'O acompanhamento será feito mensalmente nas reuniões 1:1.\n\n'
+               'Atenciosamente,'),
+    dict(nome='Acompanhamento do plano de ação (progressão)', feedback_tipo='', tom='misto',
+         assunto='Acompanhamento do plano de ação — {periodo} — {nome}',
+         corpo='Olá, {nome}.\n\n'
+               'Segue o acompanhamento da sua evolução desde o último feedback.\n\n'
+               '**O que evoluiu**\n\n- \n\n'
+               '**O que ainda precisa de atenção**\n\n- \n\n'
+               '**Próximos passos**\n\n- \n\n'
+               'Atenciosamente,'),
+]
+
+_FB_FRASES_PADRAO = [
+    ('positivo', 'Desempenho', 'Atingiu 100% da meta no período, mantendo constância nas entregas.'),
+    ('positivo', 'Desempenho', 'Foi destaque da operação em __ dias durante o período.'),
+    ('positivo', 'Qualidade', 'Não houve nenhum retorno de qualidade/curadoria relacionado às suas atividades.'),
+    ('positivo', 'Qualidade', '0 erros, 0 retornos de Curadoria e 0 retrabalhos no período.'),
+    ('positivo', 'Comportamento', 'Demonstrou iniciativa nas atividades, assumindo as demandas de forma ativa e participativa.'),
+    ('positivo', 'Comportamento', 'Manteve boa comunicação no dia a dia, auxiliando os colegas sempre que necessário.'),
+    ('positivo', 'Comportamento', 'Demonstrou autoconhecimento e maturidade profissional nas respostas do Forms semanal.'),
+    ('positivo', 'Evolução', 'Houve evolução nesse ponto: não foram registrados novos retornos no indicador.'),
+    ('melhoria', 'Prazos', 'Acompanhar as demandas prioritárias desde o recebimento até a conclusão, registrando os prazos.'),
+    ('melhoria', 'Prazos', 'Comunicar antecipadamente qualquer dificuldade ou possibilidade de atraso.'),
+    ('melhoria', 'Qualidade', 'Utilizar o checklist antes de concluir e liberar as disciplinas.'),
+    ('melhoria', 'Qualidade', 'Conferir materiais, APAs, templates, roteiros e configurações antes da liberação.'),
+    ('melhoria', 'Organização', 'Consultar diariamente o Teams, o Planner e os demais controles.'),
+    ('melhoria', 'Organização', 'Manter a organização da rotina e a atualização das ferramentas de controle.'),
+    ('melhoria', 'Organização', 'Registrar corretamente o ponto.'),
+    ('melhoria', 'Autonomia', 'Fortalecer a autonomia e a iniciativa nas demandas recorrentes, sem aguardar instruções.'),
+    ('melhoria', 'Status', '**Status:** evolução positiva, mantendo o acompanhamento no próximo mês.'),
+    ('melhoria', 'Status', '**Status:** parcialmente alcançado e ainda em desenvolvimento.'),
+]
+
+def _fb_garantir_modelos():
+    if AppSetting.query.get('feedback_modelos_criados'):
+        return
+    for i, m in enumerate(_FB_MODELOS_PADRAO):
+        db.session.add(FeedbackModelo(tipo='modelo', ordem=i, **m))
+    for i, (tom, grupo, frase) in enumerate(_FB_FRASES_PADRAO):
+        db.session.add(FeedbackModelo(tipo='frase', nome=frase[:200], corpo=frase, tom=tom, grupo=grupo, ordem=i))
+    db.session.add(AppSetting(key='feedback_modelos_criados', value='1'))
+    db.session.commit()
+
+# ── Importação do Trello ────────────────────────────────────────────────────────
+
+_FB_RE_CONTRATADO = _re.compile(r'CONTRATAD\w*\s+(?:DIA\s*)?-?\s*(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?', _re.I)
+_FB_RE_TRIMESTRE  = _re.compile(r'(\d)\s*[ºª°o]?\s*TRIMESTRE', _re.I)
+_FB_MESES_NORM    = [_norm_name(m) for m in FB_MESES]
+
+def _trello_data_criacao(trello_id):
+    try:
+        return datetime.fromtimestamp(int(trello_id[:8], 16), _BRASIL_TZ).date()
+    except (ValueError, TypeError):
+        return None
+
+def _trello_data_iso(valor):
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(valor.replace('Z', '+00:00')).astimezone(_BRASIL_TZ).date()
+    except ValueError:
+        return None
+
+def _trello_card_nome_colaborador(cards):
+    """O primeiro card (por posição) com nome curto em maiúsculas que não
+    seja um feedback/reunião é o card "da pessoa" (ex: JUNIOR, ERICK)."""
+    for c in sorted(cards, key=lambda c: c.get('pos') or 0):
+        nome = (c.get('name') or '').strip()
+        norm = _norm_name(nome)
+        if (nome and nome == nome.upper() and 2 < len(nome) <= 40
+                and _re.fullmatch(r'[A-Z ]+', norm)
+                and not any(p in norm for p in ('FEEDBACK', 'REUNI', 'FERIAS', 'ANIVERS', 'MODULO'))):
+            return c
+    return None
+
+def _trello_analisar(dados):
+    """Resumo de cada lista do quadro + sugestão do que fazer com ela."""
+    cards_por_lista = {}
+    for c in dados.get('cards', []):
+        cards_por_lista.setdefault(c.get('idList'), []).append(c)
+    resultado = []
+    for lst in dados.get('lists', []):
+        cards = cards_por_lista.get(lst['id'], [])
+        nome_lista = lst.get('name') or ''
+        norm = _norm_name(nome_lista)
+        card_nome = _trello_card_nome_colaborador(cards)
+        if 'INDICADOR' in norm or 'EQUIPE CONTROLES' in norm or not cards:
+            sugestao = 'ignorar'
+        elif 'REUNI' in norm or 'MODULO' in norm:
+            sugestao = 'equipe'
+        elif card_nome:
+            sugestao = 'colaborador'
+        else:
+            sugestao = 'equipe'
+        resultado.append({
+            'id': lst['id'], 'nome_lista': nome_lista, 'arquivada': bool(lst.get('closed')),
+            'total_cards': len(cards), 'sugestao': sugestao,
+            'nome_colaborador': (card_nome['name'].strip() if card_nome and sugestao == 'colaborador' else nome_lista.strip()),
+            'card_nome_id': card_nome['id'] if card_nome else None,
+            'ja_importada': FeedbackColaborador.query.filter_by(trello_list_id=lst['id']).first() is not None,
+        })
+    return resultado
+
+def _fb_detectar_tipo(titulo):
+    norm = _norm_name(titulo)
+    # "1:1 ... (REFERENTE AO MÊS DE JULHO E PLANO DE AÇÃO PARA O TRIMESTRE)" é mensal
+    if 'MENSAL' in norm or '1:1' in norm:
+        return 'mensal'
+    if 'TRIMESTR' in norm:
+        return 'trimestral'
+    if 'SEMANAL' in norm:
+        return 'semanal'
+    if any(m in norm for m in _FB_MESES_NORM):
+        return 'mensal'
+    return 'avulso'
+
+def _fb_detectar_periodo(tipo, titulo, conteudo, data_ref):
+    """(ano, mês, trimestre) de referência a partir do título do card, do
+    texto e da data. Ex: 'FEEDBACK MENSAL - ABRIL' → abril; trimestral sem
+    indicação → trimestre anterior à data da conversa."""
+    norm_tit = _norm_name(titulo)
+    mes = next((i + 1 for i, m in enumerate(_FB_MESES_NORM) if m in norm_tit), None)
+    ano = data_ref.year if data_ref else None
+    if tipo == 'trimestral':
+        # só o título — o texto costuma citar também o trimestre SEGUINTE (plano de ação)
+        m_tri = _FB_RE_TRIMESTRE.search(norm_tit)
+        if m_tri and 1 <= int(m_tri.group(1)) <= 4:
+            tri = int(m_tri.group(1))
+        elif mes:
+            tri = _fb_trimestre_de(mes)
+        elif data_ref:
+            tri = _fb_trimestre_de(data_ref.month) - 1 or 4
+        else:
+            tri = None
+        if tri and data_ref and tri > _fb_trimestre_de(data_ref.month):
+            ano = data_ref.year - 1
+        return ano, None, tri
+    if tipo == 'mensal' or mes:
+        if not mes and data_ref:
+            # sem mês no título: a conversa costuma ser sobre o mês anterior
+            # (ex: "AGOSTO" conversado em 17/09)
+            mes = data_ref.month - 1 or 12
+        if mes and data_ref and mes > data_ref.month:
+            ano = data_ref.year - 1
+        return ano, mes, None
+    return ano, None, None
+
+_FB_PALAVRAS_POS = ('POSITIV', 'DESTAQUE', 'EXCELENTE', 'PARABENS', 'CONSISTEN', 'CONSTANCIA', 'EVOLUCAO POSITIVA',
+                    'COMPROMETIMENTO', 'MUITO BOM', 'OTIMO', 'ATINGIU 100', 'META CUMPRIDA')
+_FB_PALAVRAS_NEG = ('PONTO DE ATENCAO', 'PONTOS DE ATENCAO', 'PRECISA', 'NECESSARIO', 'MELHORAR', 'MELHORIA',
+                    'ATRASO', 'NAO INSERIU', 'FALTA DE', 'PLANO DE ACAO', 'DIFICULDADE', 'OCORRENCIA', 'NAO FOI')
+
+def _fb_detectar_tom(conteudo):
+    norm = _norm_name(conteudo or '')
+    if not norm.strip():
+        return 'misto'
+    pos = sum(norm.count(p) for p in _FB_PALAVRAS_POS)
+    neg = sum(norm.count(p) for p in _FB_PALAVRAS_NEG)
+    if neg >= 3 and pos >= 2:
+        return 'misto'
+    if neg >= 3 or neg > pos:
+        return 'melhoria'
+    return 'positivo'
+
+_FB_RE_ENVIO = _re.compile(r'ENVIAD|ENVIO|REGISTRADO VIA E-?MAIL', _re.I)
+_FB_RE_DDMM  = _re.compile(r'(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?')
+
+def _trello_registro_extra(card, checklists, comentarios):
+    partes = []
+    etiquetas = [l.get('name') or l.get('color') for l in card.get('labels', [])]
+    if etiquetas:
+        partes.append('**Etiquetas:** ' + ', '.join(etiquetas))
+    for ch in checklists:
+        itens = ch.get('checkItems') or []
+        partes.append(f'**Checklist — {ch.get("name") or "Checklist"}:**')
+        partes.extend(f'- [{"x" if i.get("state") == "complete" else " "}] {i.get("name", "").strip()}' for i in itens)
+        if not itens:
+            partes.append('- (vazio)')
+    if comentarios:
+        partes.append('**Comentários:**')
+        for a in sorted(comentarios, key=lambda a: a.get('date') or ''):
+            quando = _trello_data_iso(a.get('date'))
+            autor = (a.get('memberCreator') or {}).get('fullName') or ''
+            texto = (a.get('data') or {}).get('text', '').strip().replace('\n', ' ')
+            partes.append(f'- {quando.strftime("%d/%m/%Y") if quando else ""} {autor}: {texto}')
+    anexos = card.get('attachments') or []
+    if anexos:
+        partes.append('**Anexos (no Trello):**')
+        partes.extend(f'- {a.get("name") or "anexo"} — {a.get("url") or ""}' for a in anexos)
+    if card.get('shortUrl'):
+        partes.append(f'**Card original no Trello:** {card["shortUrl"]}')
+    return '\n'.join(partes)
+
+def _trello_status_envio(card, checklists, data_ref):
+    """Etiqueta 'ENVIADO NO E-MAIL' ou item de checklist tipo 'ENVIADO EMAIL
+    17/09' / 'REGISTRADO VIA E-MAIL 20/02' → enviado, com a data quando der."""
+    enviado = any('ENVIADO' in _norm_name(l.get('name') or '') for l in card.get('labels', []))
+    quando = None
+    for ch in checklists:
+        for item in ch.get('checkItems') or []:
+            nome = item.get('name') or ''
+            if _FB_RE_ENVIO.search(_norm_name(nome)):
+                enviado = True
+                m = _FB_RE_DDMM.search(nome)
+                if m and data_ref:
+                    try:
+                        ano = int(m.group(3)) if m.group(3) else data_ref.year
+                        ano = ano + 2000 if ano < 100 else ano
+                        quando = date(ano, int(m.group(2)), int(m.group(1)))
+                        if not m.group(3) and quando < data_ref - timedelta(days=180):
+                            quando = date(ano + 1, quando.month, quando.day)
+                    except ValueError:
+                        quando = None
+    if not enviado:
+        return False, None
+    quando = quando or data_ref
+    return True, (datetime(quando.year, quando.month, quando.day, 15, 0) if quando else None)
+
+def _fb_vincular_usuario(colab):
+    """Liga o colaborador à conta do Gestor quando o primeiro nome bate com
+    exatamente uma pessoa da equipe — e aproveita o e-mail dela."""
+    primeiro = _norm_name((colab.nome or '').split()[0]) if (colab.nome or '').split() else ''
+    if not primeiro:
+        return
+    achados = []
+    for u in User.query.all():
+        nomes = {_norm_name(((u.nome or '').split() or [''])[0]), _norm_name(u.username or '')}
+        if primeiro in nomes:
+            achados.append(u)
+    if len(achados) == 1:
+        colab.usuario_id = achados[0].id
+        if not colab.email and achados[0].email:
+            colab.email = achados[0].email
+
+def _trello_importar(dados, escolhas, autor_id):
+    """escolhas: {list_id: {'acao': colaborador|equipe|ignorar, 'nome': ...}}.
+    Nunca sobrescreve nada: lista/card que já foi importado (mesmo id do
+    Trello) é pulado — dá pra reimportar um export novo e só entra o que é novo."""
+    analise = {a['id']: a for a in _trello_analisar(dados)}
+    listas = {l['id']: l for l in dados.get('lists', [])}
+    checklists_por_card, comentarios_por_card = {}, {}
+    for ch in dados.get('checklists', []):
+        checklists_por_card.setdefault(ch.get('idCard'), []).append(ch)
+    for a in dados.get('actions', []):
+        if a.get('type') == 'commentCard':
+            card_id = ((a.get('data') or {}).get('card') or {}).get('id')
+            comentarios_por_card.setdefault(card_id, []).append(a)
+    cont = {'colaboradores': 0, 'feedbacks': 0, 'pulados': 0}
+
+    for list_id, escolha in escolhas.items():
+        acao = escolha.get('acao')
+        if acao not in ('colaborador', 'equipe') or list_id not in listas:
+            continue
+        lst, info = listas[list_id], analise[list_id]
+        colab = FeedbackColaborador.query.filter_by(trello_list_id=list_id).first()
+        card_pessoa_id = info['card_nome_id'] if acao == 'colaborador' else None
+        if not colab:
+            nome = (escolha.get('nome') or '').strip()[:200] or info['nome_colaborador']
+            colab = FeedbackColaborador(nome=nome, categoria=acao, trello_lista=lst.get('name'),
+                                        trello_list_id=list_id, ativo=not lst.get('closed'))
+            if acao == 'colaborador':
+                colab.nome_tratamento = nome.title()
+                card_pessoa = next((c for c in dados.get('cards', []) if c['id'] == card_pessoa_id), None)
+                if card_pessoa:
+                    perfil = (card_pessoa.get('desc') or '').strip()
+                    extra = _trello_registro_extra(card_pessoa, checklists_por_card.get(card_pessoa_id, []),
+                                                   comentarios_por_card.get(card_pessoa_id, []))
+                    colab.perfil = (perfil + ('\n\n' + extra if extra else '')).strip()
+                m = _FB_RE_CONTRATADO.search(lst.get('name') or '')
+                if m:
+                    base = _trello_data_criacao(card_pessoa_id or list_id)
+                    ano = int(m.group(3)) if m.group(3) else (base.year if base else None)
+                    if ano:
+                        try:
+                            colab.contratado_em = date(ano + 2000 if ano < 100 else ano, int(m.group(2)), int(m.group(1)))
+                        except ValueError:
+                            pass
+                if 'ESTAGIO' in _norm_name(lst.get('name') or ''):
+                    colab.vinculo = 'Estágio'
+                _fb_vincular_usuario(colab)
+            db.session.add(colab)
+            db.session.flush()
+            cont['colaboradores'] += 1
+
+        for card in dados.get('cards', []):
+            if card.get('idList') != list_id or card['id'] == card_pessoa_id:
+                continue
+            if Feedback.query.filter_by(trello_card_id=card['id']).first():
+                cont['pulados'] += 1
+                continue
+            titulo = (card.get('name') or '').rstrip()[:400] or '(sem título)'
+            conteudo = card.get('desc') or ''
+            data_ref = _trello_data_iso(card.get('due')) or _trello_data_criacao(card['id'])
+            tipo = _fb_detectar_tipo(titulo)
+            ano, mes, tri = _fb_detectar_periodo(tipo, titulo, conteudo, data_ref)
+            chs = checklists_por_card.get(card['id'], [])
+            enviado, enviado_em = _trello_status_envio(card, chs, data_ref)
+            fb = Feedback(colaborador_id=colab.id, titulo=titulo, tipo=tipo, tom=_fb_detectar_tom(conteudo),
+                          data=data_ref, ano_ref=ano, mes_ref=mes, trimestre_ref=tri,
+                          assunto=titulo, conteudo=conteudo, enviado=enviado, enviado_em=enviado_em,
+                          enviado_canal='email' if enviado else None,
+                          registro_extra=_trello_registro_extra(card, chs, comentarios_por_card.get(card['id'], [])),
+                          arquivado=bool(card.get('closed')), origem='trello', trello_card_id=card['id'],
+                          criado_por=autor_id)
+            db.session.add(fb)
+            cont['feedbacks'] += 1
+    db.session.commit()
+    return cont
+
+# ── Rotas ────────────────────────────────────────────────────────────────────────
+
+def _fb_ultimos_meses(qtd):
+    hoje = date.today()
+    ano, mes = hoje.year, hoje.month
+    saida = []
+    for _ in range(qtd):
+        saida.append((ano, mes))
+        mes -= 1
+        if mes == 0:
+            ano, mes = ano - 1, 12
+    return list(reversed(saida))
+
+def _fb_ultimos_trimestres(qtd):
+    hoje = date.today()
+    ano, tri = hoje.year, _fb_trimestre_de(hoje.month)
+    saida = []
+    for _ in range(qtd):
+        saida.append((ano, tri))
+        tri -= 1
+        if tri == 0:
+            ano, tri = ano - 1, 4
+    return list(reversed(saida))
+
+def _fb_int(valor):
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+def _fb_data(valor):
+    try:
+        return date.fromisoformat(valor) if valor else None
+    except ValueError:
+        return None
+
+@app.route('/gestao/feedbacks')
+@admin_required
+def feedbacks():
+    _fb_garantir_modelos()
+    aba = request.args.get('aba', 'colaboradores')
+    colaboradores = FeedbackColaborador.query.order_by(FeedbackColaborador.nome).all()
+    ativos = [c for c in colaboradores if c.ativo and c.categoria == 'colaborador']
+    todos_fb = Feedback.query.order_by(Feedback.data.desc().nullslast(), Feedback.id.desc()).all()
+    por_colab = {}
+    for f in todos_fb:
+        por_colab.setdefault(f.colaborador_id, []).append(f)
+
+    # Referência dos selos de cada card: mês anterior e trimestre anterior
+    hoje = date.today()
+    ano_tri, tri = _fb_ultimos_trimestres(2)[0]
+    ref = {'mes': hoje.month - 1 or 12, 'ano_mes': hoje.year if hoje.month > 1 else hoje.year - 1,
+           'tri': tri, 'ano_tri': ano_tri}
+    contexto = dict(aba=aba, colaboradores=colaboradores, ativos=ativos, por_colab=por_colab, ref=ref,
+                    meses_nome=FB_MESES, total=len(todos_fb), tipos=FEEDBACK_TIPOS, tons=FEEDBACK_TONS,
+                    canais=dict(FEEDBACK_CANAIS))
+    if aba == 'mensal':
+        meses = _fb_ultimos_meses(12)
+        grade = {}
+        for f in todos_fb:
+            if f.tipo == 'mensal' and f.ano_ref and f.mes_ref and not f.arquivado:
+                grade.setdefault((f.colaborador_id, f.ano_ref, f.mes_ref), []).append(f)
+        contexto.update(meses=meses, grade=grade)
+    elif aba == 'trimestral':
+        trimestres = _fb_ultimos_trimestres(8)
+        grade = {}
+        for f in todos_fb:
+            if f.tipo == 'trimestral' and f.ano_ref and f.trimestre_ref and not f.arquivado:
+                grade.setdefault((f.colaborador_id, f.ano_ref, f.trimestre_ref), []).append(f)
+        contexto.update(trimestres=trimestres, grade=grade)
+    elif aba == 'todos':
+        q = (request.args.get('q') or '').strip()
+        f_colab = _fb_int(request.args.get('colaborador'))
+        f_tipo = request.args.get('tipo') or ''
+        f_tom = request.args.get('tom') or ''
+        f_envio = request.args.get('envio') or ''
+        f_arq = request.args.get('arquivados') == '1'
+        lista = todos_fb
+        if not f_arq:
+            lista = [f for f in lista if not f.arquivado]
+        if f_colab:
+            lista = [f for f in lista if f.colaborador_id == f_colab]
+        if f_tipo:
+            lista = [f for f in lista if f.tipo == f_tipo]
+        if f_tom:
+            lista = [f for f in lista if f.tom == f_tom]
+        if f_envio == 'enviado':
+            lista = [f for f in lista if f.enviado]
+        elif f_envio == 'nao_enviado':
+            lista = [f for f in lista if not f.enviado]
+        if q:
+            nq = _norm_name(q)
+            lista = [f for f in lista if nq in _norm_name(f.titulo or '') or nq in _norm_name(f.conteudo or '')
+                     or nq in _norm_name(f.colaborador.nome or '')]
+        contexto.update(lista=lista, q=q, f_colab=f_colab, f_tipo=f_tipo, f_tom=f_tom,
+                        f_envio=f_envio, f_arq=f_arq)
+    return render_template('feedbacks.html', **contexto)
+
+@app.route('/gestao/feedbacks/colaborador/novo', methods=['GET', 'POST'])
+@admin_required
+def feedback_colaborador_novo():
+    if request.method == 'POST':
+        nome = (request.form.get('nome') or '').strip()
+        if not nome:
+            flash('Informe o nome.', 'danger')
+            return redirect(url_for('feedback_colaborador_novo'))
+        c = FeedbackColaborador(nome=nome[:200])
+        _fb_preencher_colaborador(c, request.form)
+        if not c.nome_tratamento:
+            c.nome_tratamento = nome.title()
+        db.session.add(c)
+        db.session.commit()
+        flash('Colaborador cadastrado.', 'success')
+        return redirect(url_for('feedback_colaborador', id=c.id))
+    usuarios = User.query.filter(User.ativo != False).order_by(User.nome, User.username).all()
+    return render_template('feedback_colaborador.html', colab=None, usuarios=usuarios)
+
+def _fb_preencher_colaborador(c, form):
+    c.nome = (form.get('nome') or c.nome or '').strip()[:200]
+    c.nome_tratamento = (form.get('nome_tratamento') or '').strip()[:200] or None
+    c.email = (form.get('email') or '').strip()[:200] or None
+    c.usuario_id = _fb_int(form.get('usuario_id'))
+    c.categoria = form.get('categoria') if form.get('categoria') in ('colaborador', 'equipe') else 'colaborador'
+    c.vinculo = (form.get('vinculo') or '').strip()[:50] or None
+    c.contratado_em = _fb_data(form.get('contratado_em'))
+    c.perfil = (form.get('perfil') or '').strip() or None
+    c.ativo = form.get('ativo') == '1'
+    if c.usuario_id and not c.email:
+        u = User.query.get(c.usuario_id)
+        c.email = u.email if u else None
+
+@app.route('/gestao/feedbacks/colaborador/<int:id>', methods=['GET', 'POST'])
+@admin_required
+def feedback_colaborador(id):
+    c = FeedbackColaborador.query.get_or_404(id)
+    if request.method == 'POST':
+        _fb_preencher_colaborador(c, request.form)
+        if not c.nome:
+            flash('O nome não pode ficar vazio.', 'danger')
+            db.session.rollback()
+        else:
+            db.session.commit()
+            flash('Dados do colaborador salvos.', 'success')
+        return redirect(url_for('feedback_colaborador', id=id))
+    fbs = c.feedbacks.order_by(Feedback.data.desc().nullslast(), Feedback.id.desc()).all()
+    obs = c.observacoes.order_by(FeedbackObservacao.data.desc(), FeedbackObservacao.id.desc()).all()
+    usuarios = User.query.filter(User.ativo != False).order_by(User.nome, User.username).all()
+    return render_template('feedback_colaborador.html', colab=c, fbs=fbs, obs=obs, usuarios=usuarios,
+                           tipos=dict(FEEDBACK_TIPOS), tons=dict(FEEDBACK_TONS), canais=dict(FEEDBACK_CANAIS))
+
+@app.route('/gestao/feedbacks/colaborador/<int:id>/observacao', methods=['POST'])
+@admin_required
+def feedback_observacao_nova(id):
+    c = FeedbackColaborador.query.get_or_404(id)
+    texto = (request.form.get('texto') or '').strip()
+    if texto:
+        fb_id = _fb_int(request.form.get('feedback_id'))
+        if fb_id and not Feedback.query.filter_by(id=fb_id, colaborador_id=c.id).first():
+            fb_id = None
+        tom = request.form.get('tom') if request.form.get('tom') in ('positivo', 'melhoria', 'neutro') else 'neutro'
+        db.session.add(FeedbackObservacao(colaborador_id=c.id, feedback_id=fb_id, tom=tom, texto=texto,
+                                          data=_fb_data(request.form.get('data')) or date.today(),
+                                          autor_id=session['user_id']))
+        db.session.commit()
+        flash('Observação registrada.', 'success')
+        if request.form.get('voltar') == 'feedback' and fb_id:
+            return redirect(url_for('feedback_ver', id=fb_id) + '#observacoes')
+    return redirect(url_for('feedback_colaborador', id=id) + '#observacoes')
+
+@app.route('/gestao/feedbacks/observacao/<int:id>/excluir', methods=['POST'])
+@admin_required
+def feedback_observacao_excluir(id):
+    o = FeedbackObservacao.query.get_or_404(id)
+    colab_id = o.colaborador_id
+    db.session.delete(o)
+    db.session.commit()
+    flash('Observação excluída.', 'success')
+    return redirect(url_for('feedback_colaborador', id=colab_id) + '#observacoes')
+
+def _fb_salvar_form(fb, form):
+    colab = FeedbackColaborador.query.get(_fb_int(form.get('colaborador_id')) or 0)
+    if not colab:
+        return 'Escolha o colaborador.'
+    tipo = form.get('tipo') if form.get('tipo') in dict(FEEDBACK_TIPOS) else 'mensal'
+    ano = _fb_int(form.get('ano_ref'))
+    mes = _fb_int(form.get('mes_ref')) if tipo != 'trimestral' else None
+    tri = _fb_int(form.get('trimestre_ref')) if tipo == 'trimestral' else None
+    mes = mes if mes and 1 <= mes <= 12 else None
+    tri = tri if tri and 1 <= tri <= 4 else None
+    titulo = (form.get('titulo') or '').strip()
+    if not titulo:
+        rotulo = dict(FEEDBACK_TIPOS)[tipo].split(' ')[0].upper()
+        titulo = f'FEEDBACK {rotulo} - {colab.nome}'
+        if tri:
+            titulo += f' ({tri}º TRIMESTRE/{ano or ""})'
+        elif mes:
+            titulo += f' ({FB_MESES[mes - 1].upper()})'
+    fb.colaborador_id = colab.id
+    fb.tipo = tipo
+    fb.tom = form.get('tom') if form.get('tom') in dict(FEEDBACK_TONS) else 'misto'
+    fb.data = _fb_data(form.get('data')) or fb.data or date.today()
+    fb.ano_ref, fb.mes_ref, fb.trimestre_ref = ano, mes, tri
+    fb.titulo = _fb_aplicar_marcadores(titulo, colab, tipo, ano, mes, tri)[:400]
+    fb.assunto = _fb_aplicar_marcadores((form.get('assunto') or '').strip(), colab, tipo, ano, mes, tri)[:400] or fb.titulo
+    fb.conteudo = _fb_aplicar_marcadores(form.get('conteudo') or '', colab, tipo, ano, mes, tri)
+    fb.updated_at = datetime.utcnow()
+    return None
+
+def _fb_vincular_observacoes(fb, form):
+    """Observações inseridas no texto pelo painel passam a apontar pra este
+    feedback — saem da lista de "novas" no próximo."""
+    for oid in form.getlist('obs_usadas'):
+        o = FeedbackObservacao.query.get(_fb_int(oid) or 0)
+        if o and o.colaborador_id == fb.colaborador_id and not o.feedback_id:
+            o.feedback_id = fb.id
+
+@app.route('/gestao/feedbacks/novo', methods=['GET', 'POST'])
+@admin_required
+def feedback_novo():
+    _fb_garantir_modelos()
+    if request.method == 'POST':
+        fb = Feedback(origem='gestor', criado_por=session['user_id'])
+        erro = _fb_salvar_form(fb, request.form)
+        if erro:
+            flash(erro, 'danger')
+            return redirect(url_for('feedback_novo'))
+        db.session.add(fb)
+        db.session.flush()
+        _fb_vincular_observacoes(fb, request.form)
+        db.session.commit()
+        flash('Feedback salvo.', 'success')
+        return redirect(url_for('feedback_ver', id=fb.id))
+
+    hoje = date.today()
+    mes_ant = hoje.month - 1 or 12
+    tipo = request.args.get('tipo') if request.args.get('tipo') in dict(FEEDBACK_TIPOS) else 'mensal'
+    fb = Feedback(tipo=tipo, tom=request.args.get('tom') or 'misto', data=hoje,
+                  colaborador_id=_fb_int(request.args.get('colaborador')),
+                  ano_ref=_fb_int(request.args.get('ano')) or (hoje.year if hoje.month > 1 else hoje.year - 1),
+                  mes_ref=_fb_int(request.args.get('mes')) or mes_ant,
+                  trimestre_ref=_fb_int(request.args.get('trimestre')) or (_fb_trimestre_de(hoje.month) - 1 or 4))
+    base = Feedback.query.get(_fb_int(request.args.get('base')) or 0)
+    if base:
+        fb.colaborador_id = fb.colaborador_id or base.colaborador_id
+        fb.conteudo, fb.tom, fb.assunto = base.conteudo, base.tom, base.assunto
+        if not request.args.get('tipo'):
+            fb.tipo = base.tipo
+    return _fb_render_form(fb, base=base)
+
+@app.route('/gestao/feedbacks/<int:id>/editar', methods=['GET', 'POST'])
+@admin_required
+def feedback_editar(id):
+    fb = Feedback.query.get_or_404(id)
+    if request.method == 'POST':
+        erro = _fb_salvar_form(fb, request.form)
+        if erro:
+            flash(erro, 'danger')
+            return redirect(url_for('feedback_editar', id=id))
+        _fb_vincular_observacoes(fb, request.form)
+        db.session.commit()
+        flash('Feedback atualizado.', 'success')
+        return redirect(url_for('feedback_ver', id=fb.id))
+    return _fb_render_form(fb)
+
+def _fb_render_form(fb, base=None):
+    colaboradores = FeedbackColaborador.query.order_by(FeedbackColaborador.ativo.desc(),
+                                                       FeedbackColaborador.categoria,
+                                                       FeedbackColaborador.nome).all()
+    modelos = FeedbackModelo.query.filter_by(tipo='modelo').order_by(FeedbackModelo.ordem, FeedbackModelo.id).all()
+    frases = FeedbackModelo.query.filter_by(tipo='frase').order_by(FeedbackModelo.tom, FeedbackModelo.grupo,
+                                                                   FeedbackModelo.ordem).all()
+    return render_template('feedback_form.html', fb=fb, base=base, colaboradores=colaboradores,
+                           modelos=modelos, frases=frases, tipos=FEEDBACK_TIPOS, tons=FEEDBACK_TONS,
+                           meses=FB_MESES, ano_atual=date.today().year)
+
+@app.route('/gestao/feedbacks/api/colaborador/<int:id>')
+@admin_required
+def feedback_api_colaborador(id):
+    """Histórico do colaborador pro painel "Puxar dados anteriores" do formulário."""
+    c = FeedbackColaborador.query.get_or_404(id)
+    ignorar = _fb_int(request.args.get('ignorar'))
+    fbs = [f for f in c.feedbacks.order_by(Feedback.data.desc().nullslast(), Feedback.id.desc()).all()
+           if f.id != ignorar]
+    obs = c.observacoes.order_by(FeedbackObservacao.data.asc(), FeedbackObservacao.id.asc()).all()
+    ultimo = next((f for f in fbs if f.conteudo and not f.arquivado), None)
+    return jsonify({
+        'nome': c.nome, 'nome_email': c.nome_email, 'email': c.email or '',
+        'feedbacks': [{
+            'id': f.id, 'titulo': f.titulo, 'tipo': dict(FEEDBACK_TIPOS).get(f.tipo, f.tipo),
+            'tom': dict(FEEDBACK_TONS).get(f.tom, f.tom), 'periodo': f.periodo_label,
+            'data': f.data.strftime('%d/%m/%Y') if f.data else '', 'conteudo': f.conteudo or '',
+            'html': str(_fb_md_html(f.conteudo)), 'enviado': bool(f.enviado), 'arquivado': bool(f.arquivado),
+        } for f in fbs[:40]],
+        'observacoes': [{
+            'id': o.id, 'texto': o.texto, 'tom': o.tom, 'data': o.data.strftime('%d/%m/%Y') if o.data else '',
+            'feedback_id': o.feedback_id,
+            'nova': bool(ultimo is None or (o.data and ultimo.data and o.data >= ultimo.data)) and not o.feedback_id,
+        } for o in obs],
+        'ultimo_id': ultimo.id if ultimo else None,
+    })
+
+@app.route('/gestao/feedbacks/<int:id>')
+@admin_required
+def feedback_ver(id):
+    fb = Feedback.query.get_or_404(id)
+    irmaos = fb.colaborador.feedbacks.order_by(Feedback.data.asc().nullsfirst(), Feedback.id.asc()).all()
+    pos = next((i for i, f in enumerate(irmaos) if f.id == fb.id), 0)
+    eu = User.query.get(session['user_id'])
+    html_email = str(_fb_md_html(fb.conteudo, para_email=True))
+    return render_template('feedback_ver.html', fb=fb, colab=fb.colaborador,
+                           anterior=irmaos[pos - 1] if pos > 0 else None,
+                           proximo=irmaos[pos + 1] if pos + 1 < len(irmaos) else None,
+                           html_email=html_email, texto_simples=_fb_md_texto(fb.conteudo),
+                           obs=fb.observacoes.order_by(FeedbackObservacao.data.desc()).all(),
+                           meu_email=(eu.email if eu else ''), tipos=dict(FEEDBACK_TIPOS),
+                           tons=dict(FEEDBACK_TONS), canais=FEEDBACK_CANAIS, canais_dict=dict(FEEDBACK_CANAIS),
+                           hoje=date.today())
+
+@app.route('/gestao/feedbacks/<int:id>/enviar', methods=['POST'])
+@limiter.limit('20 per hour')
+@admin_required
+def feedback_enviar(id):
+    fb = Feedback.query.get_or_404(id)
+    para, invalidos = _fb_lista_emails(request.form.get('para'))
+    cc, invalidos_cc = _fb_lista_emails(request.form.get('cc'))
+    eu = User.query.get(session['user_id'])
+    if request.form.get('copia_para_mim') == '1' and eu and eu.email and eu.email not in cc + para:
+        cc.append(eu.email)
+    if invalidos or invalidos_cc or not para:
+        flash('Confira os e-mails: ' + (', '.join(invalidos + invalidos_cc) or 'informe ao menos um destinatário') + '.', 'danger')
+        return redirect(url_for('feedback_ver', id=id))
+    assunto = (request.form.get('assunto') or fb.assunto or fb.titulo).strip()
+    if not (fb.conteudo or '').strip():
+        flash('Este feedback está sem texto — edite antes de enviar.', 'danger')
+        return redirect(url_for('feedback_ver', id=id))
+    ok = enviar_email_html(para, assunto, _fb_md_texto(fb.conteudo), str(_fb_md_html(fb.conteudo, para_email=True)),
+                           cc=cc, reply_to=(eu.email if eu else None))
+    if ok:
+        fb.enviado, fb.enviado_em, fb.enviado_canal = True, datetime.utcnow(), 'gestor'
+        fb.enviado_para = ', '.join(para + cc)[:500]
+        fb.assunto = assunto[:400]
+        db.session.commit()
+        flash(f'Feedback enviado para {", ".join(para)}.', 'success')
+    else:
+        flash('Não foi possível enviar o e-mail agora. Tente de novo ou copie o texto e envie pelo seu e-mail.', 'danger')
+    return redirect(url_for('feedback_ver', id=id))
+
+@app.route('/gestao/feedbacks/<int:id>/marcar-enviado', methods=['POST'])
+@admin_required
+def feedback_marcar_enviado(id):
+    fb = Feedback.query.get_or_404(id)
+    if request.form.get('desfazer') == '1':
+        fb.enviado, fb.enviado_em, fb.enviado_canal, fb.enviado_para = False, None, None, None
+        flash('Marcado como não enviado.', 'success')
+    else:
+        canal = request.form.get('canal')
+        fb.enviado = True
+        fb.enviado_canal = canal if canal in dict(FEEDBACK_CANAIS) else 'outro'
+        quando = _fb_data(request.form.get('data')) or date.today()
+        fb.enviado_em = datetime(quando.year, quando.month, quando.day, 15, 0)
+        flash('Registrado como entregue (' + dict(FEEDBACK_CANAIS)[fb.enviado_canal] + ').', 'success')
+    db.session.commit()
+    return redirect(url_for('feedback_ver', id=id))
+
+@app.route('/gestao/feedbacks/<int:id>/arquivar', methods=['POST'])
+@admin_required
+def feedback_arquivar(id):
+    fb = Feedback.query.get_or_404(id)
+    fb.arquivado = not fb.arquivado
+    db.session.commit()
+    flash('Feedback arquivado.' if fb.arquivado else 'Feedback desarquivado.', 'success')
+    return redirect(url_for('feedback_ver', id=id))
+
+@app.route('/gestao/feedbacks/<int:id>/excluir', methods=['POST'])
+@admin_required
+def feedback_excluir(id):
+    fb = Feedback.query.get_or_404(id)
+    colab_id = fb.colaborador_id
+    FeedbackObservacao.query.filter_by(feedback_id=fb.id).update({'feedback_id': None})
+    db.session.delete(fb)
+    db.session.commit()
+    flash('Feedback excluído.', 'success')
+    return redirect(url_for('feedback_colaborador', id=colab_id))
+
+@app.route('/gestao/feedbacks/modelos', methods=['GET', 'POST'])
+@admin_required
+def feedback_modelos():
+    _fb_garantir_modelos()
+    if request.method == 'POST':
+        m = FeedbackModelo.query.get(_fb_int(request.form.get('id')) or 0) or FeedbackModelo()
+        m.tipo = 'frase' if request.form.get('tipo') == 'frase' else 'modelo'
+        m.corpo = (request.form.get('corpo') or '').strip()
+        m.nome = ((request.form.get('nome') or '').strip() or m.corpo)[:200]
+        m.feedback_tipo = request.form.get('feedback_tipo') if request.form.get('feedback_tipo') in dict(FEEDBACK_TIPOS) else None
+        tom = request.form.get('tom')
+        m.tom = tom if tom in ('positivo', 'melhoria', 'misto') else None
+        m.grupo = (request.form.get('grupo') or '').strip()[:100] or None
+        m.assunto = (request.form.get('assunto') or '').strip()[:400] or None
+        if not m.corpo:
+            flash('O texto não pode ficar vazio.', 'danger')
+        else:
+            if not m.id:
+                db.session.add(m)
+            db.session.commit()
+            flash('Salvo.', 'success')
+        return redirect(url_for('feedback_modelos', aba=m.tipo))
+    modelos = FeedbackModelo.query.filter_by(tipo='modelo').order_by(FeedbackModelo.ordem, FeedbackModelo.id).all()
+    frases = FeedbackModelo.query.filter_by(tipo='frase').order_by(FeedbackModelo.tom, FeedbackModelo.grupo,
+                                                                   FeedbackModelo.ordem, FeedbackModelo.id).all()
+    return render_template('feedback_modelos.html', modelos=modelos, frases=frases, aba=request.args.get('aba', 'modelo'),
+                           tipos=FEEDBACK_TIPOS, tons=FEEDBACK_TONS)
+
+@app.route('/gestao/feedbacks/modelos/<int:id>/excluir', methods=['POST'])
+@admin_required
+def feedback_modelo_excluir(id):
+    m = FeedbackModelo.query.get_or_404(id)
+    tipo = m.tipo
+    db.session.delete(m)
+    db.session.commit()
+    flash('Excluído.', 'success')
+    return redirect(url_for('feedback_modelos', aba=tipo))
+
+@app.route('/gestao/feedbacks/importar', methods=['GET', 'POST'])
+@admin_required
+def feedback_importar():
+    if request.method == 'GET':
+        return render_template('feedback_importar.html')
+    arquivo = request.files.get('arquivo')
+    if not arquivo or not arquivo.filename:
+        if request.form.get('etapa') == 'analisar':
+            return jsonify({'erro': 'Escolha o arquivo .json exportado do Trello.'}), 400
+        flash('Escolha o arquivo .json exportado do Trello.', 'danger')
+        return redirect(url_for('feedback_importar'))
+    try:
+        dados = json.loads(arquivo.read().decode('utf-8-sig'))
+        if not isinstance(dados, dict) or 'lists' not in dados or 'cards' not in dados:
+            raise ValueError
+    except (ValueError, UnicodeDecodeError):
+        if request.form.get('etapa') == 'analisar':
+            return jsonify({'erro': 'Esse arquivo não parece um export JSON de quadro do Trello.'}), 400
+        flash('Esse arquivo não parece um export JSON de quadro do Trello.', 'danger')
+        return redirect(url_for('feedback_importar'))
+
+    if request.form.get('etapa') == 'analisar':
+        # 1ª etapa (via fetch, sem recarregar a página — o arquivo continua
+        # escolhido no campo): mostra o que tem no quadro pra escolher o que importar
+        return jsonify({'quadro': dados.get('name'), 'total_cards': len(dados.get('cards', [])),
+                        'listas': _trello_analisar(dados)})
+    escolhas = {}
+    for lst in dados.get('lists', []):
+        acao = request.form.get(f'acao_{lst["id"]}')
+        if acao:
+            escolhas[lst['id']] = {'acao': acao, 'nome': request.form.get(f'nome_{lst["id"]}')}
+    try:
+        cont = _trello_importar(dados, escolhas, session['user_id'])
+    except Exception:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        flash('Erro ao importar — nada foi gravado. Confira o arquivo e tente de novo.', 'danger')
+        return redirect(url_for('feedback_importar'))
+    flash(f'Importação concluída: {cont["colaboradores"]} colaborador(es) novo(s), {cont["feedbacks"]} feedback(s) '
+          f'importado(s), {cont["pulados"]} já existiam e foram mantidos como estão.', 'success')
+    return redirect(url_for('feedbacks'))
+
 
 @app.errorhandler(Exception)
 def erro_nao_tratado(e):

@@ -1,0 +1,395 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Editar' if fb.id else 'Novo' }} feedback — Gestor{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+<style>
+  .fbf-toolbar { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:6px; }
+  .fbf-toolbar button { font-size:12px; padding:4px 10px; border:1px solid var(--border); background:var(--surface);
+                        color:var(--text); border-radius:6px; cursor:pointer; }
+  .fbf-toolbar button:hover { border-color:var(--primary); color:var(--primary); }
+  #fbConteudo { width:100%; min-height:440px; font-family:Consolas,Menlo,monospace; font-size:13px; line-height:1.5; }
+  #fbPreview { min-height:440px; max-height:70vh; overflow:auto; }
+  .fbf-painel { position:sticky; top:12px; max-height:calc(100vh - 40px); overflow:auto; }
+  .fbf-ptabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:10px; }
+  .fbf-ptabs button { flex:1; background:none; border:0; border-bottom:2px solid transparent; padding:8px 4px;
+                      font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; }
+  .fbf-ptabs button.ativo { color:var(--primary); border-bottom-color:var(--primary); }
+  .fbf-item { border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:var(--surface); }
+  .fbf-item-tit { font-size:13px; font-weight:600; }
+  .fbf-frase { display:block; width:100%; text-align:left; background:var(--surface); border:1px solid var(--border);
+               border-radius:8px; padding:7px 10px; margin-bottom:6px; font-size:12.5px; color:var(--text); cursor:pointer; }
+  .fbf-frase:hover { border-color:var(--primary); }
+  .fbf-frase.positivo { border-left:3px solid #16a34a; }
+  .fbf-frase.melhoria { border-left:3px solid #d97706; }
+  .fbf-mini { font-size:11.5px; padding:3px 8px; }
+  .fbf-expand { display:none; margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:12.5px; max-height:320px; overflow:auto; }
+  .fbf-item.aberto .fbf-expand { display:block; }
+</style>
+<div class="page">
+  <div style="margin-bottom:8px">
+    {% if fb.id %}<a href="{{ url_for('feedback_ver', id=fb.id) }}" class="fb-muted">← Voltar ao feedback</a>
+    {% else %}<a href="{{ url_for('feedbacks') }}" class="fb-muted">← Feedbacks</a>{% endif %}
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="page-title">{{ 'Editar feedback' if fb.id else 'Novo feedback' }}</div>
+      <div class="page-subtitle">Marcadores como <code>{nome}</code>, <code>{periodo}</code>, <code>{mes}</code>, <code>{trimestre}</code> e <code>{meses_trimestre}</code> são preenchidos ao salvar.</div>
+    </div>
+  </div>
+  {% if base %}<div class="fb-aviso" style="margin-bottom:14px">Texto puxado de “{{ base.titulo }}” ({{ base.periodo_label }}) como base — ajuste o que mudou.</div>{% endif %}
+
+  <form method="POST" id="fbForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div id="fbObsUsadas"></div>
+    <div class="fb-2col" style="display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);gap:18px;align-items:start">
+      <div>
+        <div class="card"><div class="card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Colaborador *</label>
+              <select name="colaborador_id" id="fbColab" required>
+                <option value="">— escolha —</option>
+                {% for c in colaboradores %}
+                <option value="{{ c.id }}" data-nome="{{ c.nome_email }}" data-email="{{ c.email or '' }}"
+                        {% if fb.colaborador_id == c.id %}selected{% endif %}>{{ c.nome }}{% if not c.ativo %} (inativo){% endif %}{% if c.categoria == 'equipe' %} (equipe){% endif %}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Data da conversa/feedback</label>
+              <input type="date" name="data" value="{{ fb.data.isoformat() if fb.data else '' }}">
+            </div>
+            <div class="form-group">
+              <label>Tipo</label>
+              <select name="tipo" id="fbTipo">
+                {% for k, v in tipos %}<option value="{{ k }}" {% if fb.tipo == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Tom</label>
+              <select name="tom" id="fbTom">
+                {% for k, v in tons %}<option value="{{ k }}" {% if fb.tom == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="form-group" id="fbCampoMes">
+              <label>Mês de referência</label>
+              <select name="mes_ref" id="fbMes">
+                <option value="">—</option>
+                {% for m in meses %}<option value="{{ loop.index }}" {% if fb.mes_ref == loop.index %}selected{% endif %}>{{ m|capitalize }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="form-group" id="fbCampoTri">
+              <label>Trimestre de referência</label>
+              <select name="trimestre_ref" id="fbTri">
+                {% for t in [1,2,3,4] %}<option value="{{ t }}" {% if fb.trimestre_ref == t %}selected{% endif %}>{{ t }}º trimestre</option>{% endfor %}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Ano de referência</label>
+              <input type="number" name="ano_ref" id="fbAno" min="2020" max="2100" value="{{ fb.ano_ref or ano_atual }}">
+            </div>
+            <div class="form-group full">
+              <label>Título <span class="fb-muted">(vazio = gerado automaticamente)</span></label>
+              <input type="text" name="titulo" value="{{ fb.titulo or '' }}" placeholder="Ex: FEEDBACK 1:1 PEDRO - (SETEMBRO)">
+            </div>
+            <div class="form-group full">
+              <label>Assunto do e-mail</label>
+              <input type="text" name="assunto" id="fbAssunto" value="{{ fb.assunto or '' }}" placeholder="Feedback 1:1 — {periodo} — {nome}">
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;margin:16px 0 6px;gap:10px;flex-wrap:wrap">
+            <label style="font-weight:600;font-size:13px">Texto do feedback</label>
+            <div class="fbf-toolbar">
+              <button type="button" onclick="fbEnvolver('**','**')" title="Negrito"><strong>N</strong></button>
+              <button type="button" onclick="fbPrefixo('### ')" title="Título de seção">Título</button>
+              <button type="button" onclick="fbPrefixo('- ')" title="Lista">• Lista</button>
+              <button type="button" onclick="fbPrefixo('1. ')" title="Lista numerada">1. Lista</button>
+              <button type="button" onclick="fbInserir('\n---\n')" title="Linha divisória">—</button>
+              <button type="button" id="fbBtnPreview" onclick="fbTogglePreview()">👁 Pré-visualizar</button>
+            </div>
+          </div>
+          <textarea name="conteudo" id="fbConteudo" placeholder="Escreva aqui, aplique um modelo ou puxe um feedback anterior pelo painel ao lado.">{{ fb.conteudo or '' }}</textarea>
+          <div id="fbPreview" class="fb-papel fb-conteudo" style="display:none"></div>
+          <div style="display:flex;gap:8px;margin-top:14px">
+            <button type="submit" class="btn btn-primary">Salvar feedback</button>
+            <a href="{{ url_for('feedback_ver', id=fb.id) if fb.id else url_for('feedbacks') }}" class="btn btn-secondary">Cancelar</a>
+          </div>
+        </div></div>
+      </div>
+
+      <div class="fbf-painel">
+        <div class="card"><div class="card-body">
+          <div class="fbf-ptabs">
+            <button type="button" data-ptab="anteriores" class="ativo">Anteriores</button>
+            <button type="button" data-ptab="modelos">Modelos</button>
+            <button type="button" data-ptab="frases">Frases sugeridas</button>
+          </div>
+
+          <div data-ppanel="anteriores">
+            <div id="fbAntVazio" class="fb-muted">Escolha o colaborador para puxar os feedbacks anteriores e as observações de progressão.</div>
+            <div id="fbAntConteudo" style="display:none">
+              <div class="fbf-item" style="background:var(--primary-light)">
+                <div class="fbf-item-tit">Progressão desde o último feedback</div>
+                <div class="fb-muted" style="margin:4px 0 8px">Puxa os direcionamentos/plano de ação do último feedback para você marcar o status de cada um, e as observações registradas desde então.</div>
+                <div class="fb-acoes">
+                  <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbPuxarPlano()">Puxar plano de ação</button>
+                  <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbInserirObservacoes()">Inserir observações marcadas</button>
+                </div>
+                <div id="fbObsLista" style="margin-top:8px"></div>
+                <div style="margin-top:6px"><a href="#" id="fbLinkObs" class="fb-muted" target="_blank">+ registrar observação</a></div>
+              </div>
+              <div class="section-label" style="margin:12px 0 6px">Feedbacks anteriores</div>
+              <div id="fbAntLista"></div>
+            </div>
+          </div>
+
+          <div data-ppanel="modelos" style="display:none">
+            <div class="fb-muted" style="margin-bottom:8px">Modelos padrão — aplicar substitui o texto (pede confirmação). <a href="{{ url_for('feedback_modelos') }}" target="_blank">Editar modelos</a></div>
+            {% for m in modelos %}
+            <div class="fbf-item" data-modelo-tipo="{{ m.feedback_tipo or '' }}">
+              <div class="fbf-item-tit">{{ m.nome }}</div>
+              <div style="display:flex;gap:6px;margin:6px 0">
+                <span class="fb-tag">{{ dict(tipos).get(m.feedback_tipo, 'Qualquer tipo') }}</span>
+                {% if m.tom %}<span class="fb-tag {{ m.tom }}">{{ dict(tons).get(m.tom, m.tom) }}</span>{% endif %}
+              </div>
+              <div class="fb-acoes">
+                <button type="button" class="btn btn-primary btn-sm fbf-mini" onclick="fbAplicarModelo({{ m.id }}, 'substituir')">Aplicar</button>
+                <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbAplicarModelo({{ m.id }}, 'inserir')">Inserir no cursor</button>
+              </div>
+            </div>
+            {% else %}<div class="fb-muted">Nenhum modelo cadastrado.</div>{% endfor %}
+          </div>
+
+          <div data-ppanel="frases" style="display:none">
+            <div class="fb-muted" style="margin-bottom:8px">Clique para inserir como item de lista no cursor.</div>
+            {% for tom, itens in frases|groupby('tom') %}
+            <div class="section-label" style="margin:10px 0 6px">{{ 'Positivas' if tom == 'positivo' else ('Melhorias / direcionamentos' if tom == 'melhoria' else 'Outras') }}</div>
+            {% for f in itens %}
+            <button type="button" class="fbf-frase {{ f.tom }}" data-frase="{{ f.corpo }}" onclick="fbInserirFrase(this)">
+              {% if f.grupo %}<span class="fb-muted">{{ f.grupo }} · </span>{% endif %}{{ f.corpo|replace('**','') }}
+            </button>
+            {% endfor %}
+            {% else %}<div class="fb-muted">Nenhuma frase cadastrada.</div>{% endfor %}
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const MODELOS = {
+    {% for m in modelos %}{{ m.id }}: {assunto: {{ (m.assunto or '')|tojson }}, corpo: {{ (m.corpo or '')|tojson }}},{% endfor %}
+  };
+  const MESES = {{ meses|tojson }};
+  const API = "{{ url_for('feedback_api_colaborador', id=0) }}".replace(/0$/, '');
+  const URL_COLAB = "{{ url_for('feedback_colaborador', id=0) }}".replace(/0$/, '');
+  const FB_ID = {{ fb.id or 'null' }};
+  const ta = document.getElementById('fbConteudo');
+  const sel = document.getElementById('fbColab');
+  const tipo = document.getElementById('fbTipo');
+  let historico = null;
+
+  // ── campos de período conforme o tipo
+  function atualizaPeriodo(){
+    const t = tipo.value;
+    document.getElementById('fbCampoMes').style.display = (t === 'trimestral') ? 'none' : '';
+    document.getElementById('fbCampoTri').style.display = (t === 'trimestral') ? '' : 'none';
+    document.querySelectorAll('[data-modelo-tipo]').forEach(el => {
+      const mt = el.dataset.modeloTipo;
+      el.style.order = (!mt || mt === t) ? 0 : 1;
+      el.style.opacity = (!mt || mt === t) ? 1 : .55;
+    });
+  }
+  tipo.addEventListener('change', atualizaPeriodo);
+  atualizaPeriodo();
+
+  // ── edição do texto
+  function inserir(txt){
+    const ini = ta.selectionStart, fim = ta.selectionEnd;
+    ta.value = ta.value.slice(0, ini) + txt + ta.value.slice(fim);
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ini + txt.length;
+    if (previewAberto) renderPreview();
+  }
+  window.fbInserir = inserir;
+  window.fbEnvolver = function(a, b){
+    const ini = ta.selectionStart, fim = ta.selectionEnd;
+    const sel = ta.value.slice(ini, fim) || 'texto';
+    ta.value = ta.value.slice(0, ini) + a + sel + b + ta.value.slice(fim);
+    ta.focus(); ta.selectionStart = ini + a.length; ta.selectionEnd = ini + a.length + sel.length;
+  };
+  window.fbPrefixo = function(p){
+    const ini = ta.value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
+    ta.value = ta.value.slice(0, ini) + p + ta.value.slice(ini);
+    ta.focus(); ta.selectionStart = ta.selectionEnd = ta.selectionStart + p.length;
+  };
+  function inserirBloco(txt){
+    // garante linha em branco antes/depois pra não grudar no parágrafo atual
+    const antes = ta.value.slice(0, ta.selectionStart);
+    const prefixo = (!antes || antes.endsWith('\n\n')) ? '' : (antes.endsWith('\n') ? '\n' : '\n\n');
+    inserir(prefixo + txt.replace(/\s+$/, '') + '\n\n');
+  }
+  window.fbInserirFrase = function(btn){
+    const antes = ta.value.slice(0, ta.selectionStart);
+    const prefixo = (!antes || antes.endsWith('\n')) ? '' : '\n';
+    inserir(prefixo + '- ' + btn.dataset.frase + '\n');
+  };
+  window.fbAplicarModelo = function(id, modo){
+    const m = MODELOS[id]; if (!m) return;
+    if (modo === 'substituir') {
+      if (ta.value.trim() && !confirm('Substituir o texto atual pelo modelo?')) return;
+      ta.value = m.corpo;
+    } else {
+      inserirBloco(m.corpo);
+    }
+    const ass = document.getElementById('fbAssunto');
+    if (m.assunto && (!ass.value.trim() || confirm('Usar também o assunto do modelo?\n' + m.assunto))) ass.value = m.assunto;
+    if (previewAberto) renderPreview();
+  };
+
+  // ── pré-visualização (mesmas regras do servidor)
+  let previewAberto = false;
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function inline(s){ return esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'); }
+  function marcadores(txt){
+    const opt = sel.options[sel.selectedIndex];
+    const mes = parseInt(document.getElementById('fbMes').value) || 0;
+    const tri = parseInt(document.getElementById('fbTri').value) || 0;
+    const ano = document.getElementById('fbAno').value || '';
+    const mesNome = mes ? MESES[mes-1] : '';
+    const mesesTri = tri ? `${MESES[(tri-1)*3]}, ${MESES[(tri-1)*3+1]} e ${MESES[(tri-1)*3+2]}` : '';
+    let periodo = (tipo.value === 'trimestral' && tri) ? `${tri}º trimestre${ano ? ' de ' + ano : ''} (${mesesTri})`
+                : (mes ? (ano ? `${mesNome} de ${ano}` : mesNome) : ano);
+    const v = {nome: (opt && opt.dataset.nome) || '', periodo, mes: mesNome, ano, trimestre: tri ? tri + 'º' : '', meses_trimestre: mesesTri};
+    return txt.replace(/\{(nome|periodo|mes|ano|trimestre|meses_trimestre)\}/g, (_, k) => v[k]);
+  }
+  function md(txt){
+    const out = []; let par = []; let lista = null;
+    const fechaPar = () => { if (par.length) { out.push('<p style="margin:0 0 10px">' + par.join('<br>') + '</p>'); par = []; } };
+    const fechaLista = () => { if (lista) { out.push(`<${lista.tag}${lista.inicio > 1 ? ' start="' + lista.inicio + '"' : ''} style="margin:0 0 10px;padding-left:22px">` + lista.itens.join('') + `</${lista.tag}>`); lista = null; } };
+    (txt || '').replace(/\r/g, '').split('\n').forEach(bruta => {
+      const linha = bruta.replace(/\s+$/, ''); const s = linha.trim();
+      if (!s) { fechaPar(); fechaLista(); return; }
+      const t = s.match(/^(#{1,6})\s+(.*)$/), b = linha.match(/^(\s*)[-*+•]\s+(.*)$/), n = linha.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
+      if (s === '---' || s === '***' || s === '___') { fechaPar(); fechaLista(); out.push('<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">'); }
+      else if (t) { fechaPar(); fechaLista(); const tam = {1:18,2:16}[t[1].length] || 15; out.push(`<p style="margin:16px 0 6px;font-size:${tam}px;font-weight:700">${esc(t[2].replace(/\*\*/g,''))}</p>`); }
+      else if (b || n) {
+        fechaPar(); const tag = b ? 'ul' : 'ol';
+        if (!lista || lista.tag !== tag) { fechaLista(); lista = {tag, itens: [], inicio: n ? parseInt(n[2]) : 1}; }
+        const recuo = (b || n)[1].length; const item = b ? b[2] : n[3];
+        lista.itens.push(`<li style="margin:0 0 4px;${recuo >= 2 ? 'margin-left:' + Math.min(Math.floor(recuo/2),3)*16 + 'px' : ''}">${inline(item)}</li>`);
+      } else { fechaLista(); par.push(inline(s)); }
+    });
+    fechaPar(); fechaLista();
+    return out.join('');
+  }
+  function renderPreview(){ document.getElementById('fbPreview').innerHTML = md(marcadores(ta.value)) || '<span class="fb-muted">(vazio)</span>'; }
+  window.fbTogglePreview = function(){
+    previewAberto = !previewAberto;
+    document.getElementById('fbPreview').style.display = previewAberto ? '' : 'none';
+    ta.style.display = previewAberto ? 'none' : '';
+    document.getElementById('fbBtnPreview').textContent = previewAberto ? '✎ Voltar a editar' : '👁 Pré-visualizar';
+    if (previewAberto) renderPreview();
+  };
+
+  // ── painel lateral
+  document.querySelectorAll('[data-ptab]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-ptab]').forEach(x => x.classList.toggle('ativo', x === b));
+    document.querySelectorAll('[data-ppanel]').forEach(p => p.style.display = p.dataset.ppanel === b.dataset.ptab ? '' : 'none');
+  }));
+
+  function carregaHistorico(){
+    const id = sel.value;
+    historico = null;
+    document.getElementById('fbAntVazio').style.display = id ? 'none' : '';
+    document.getElementById('fbAntConteudo').style.display = 'none';
+    if (!id) return;
+    document.getElementById('fbLinkObs').href = URL_COLAB + id + '#observacoes';
+    fetch(API + id + (FB_ID ? '?ignorar=' + FB_ID : ''), {headers: {'Accept': 'application/json'}})
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { historico = d; renderHistorico(); })
+      .catch(() => showToast('Não foi possível carregar o histórico.', 'danger'));
+  }
+  function renderHistorico(){
+    const d = historico;
+    document.getElementById('fbAntConteudo').style.display = '';
+    const obs = d.observacoes.filter(o => o.nova);
+    document.getElementById('fbObsLista').innerHTML = obs.length ? obs.map(o => `
+      <label style="display:flex;gap:6px;align-items:flex-start;font-size:12.5px;margin-bottom:4px;cursor:pointer">
+        <input type="checkbox" class="fbObsCheck" value="${o.id}" checked style="margin-top:3px">
+        <span><span class="fb-tag ${o.tom}" style="font-size:10px">${o.tom === 'positivo' ? 'evolução' : (o.tom === 'melhoria' ? 'atenção' : 'nota')}</span>
+        <span class="fb-muted">${o.data}</span> ${esc(o.texto)}</span>
+      </label>`).join('') : '<div class="fb-muted">Nenhuma observação nova desde o último feedback.</div>';
+    document.getElementById('fbAntLista').innerHTML = d.feedbacks.length ? d.feedbacks.map(f => `
+      <div class="fbf-item" id="fbAnt${f.id}" ${f.arquivado ? 'style="opacity:.6"' : ''}>
+        <div style="display:flex;justify-content:space-between;gap:6px">
+          <a href="#" class="fbf-item-tit" style="color:var(--text);text-decoration:none" onclick="this.closest('.fbf-item').classList.toggle('aberto');return false">${esc(f.titulo)}</a>
+          <span class="fb-muted" style="white-space:nowrap">${f.data}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">
+          <span class="fb-tag">${esc(f.tipo)} · ${esc(f.periodo)}</span>
+          ${f.enviado ? '<span class="fb-tag enviado">✓ enviado</span>' : ''}
+        </div>
+        <div class="fb-acoes">
+          <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="this.closest('.fbf-item').classList.toggle('aberto')">Ler</button>
+          <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbUsarAnterior(${f.id}, 'inserir')" ${f.conteudo ? '' : 'disabled'}>Inserir no cursor</button>
+          <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbUsarAnterior(${f.id}, 'base')" ${f.conteudo ? '' : 'disabled'}>Usar como base</button>
+        </div>
+        <div class="fbf-expand fb-conteudo">${f.html || '<span class="fb-muted">(sem texto)</span>'}</div>
+      </div>`).join('') : '<div class="fb-muted">Nenhum feedback anterior.</div>';
+  }
+  window.fbUsarAnterior = function(id, modo){
+    const f = historico && historico.feedbacks.find(x => x.id === id); if (!f) return;
+    if (modo === 'base') {
+      if (ta.value.trim() && !confirm('Substituir o texto atual pelo texto de “' + f.titulo + '”?')) return;
+      ta.value = f.conteudo;
+    } else inserirBloco(f.conteudo);
+    if (previewAberto) renderPreview();
+  };
+  window.fbPuxarPlano = function(){
+    if (!historico) return;
+    const ultimo = historico.feedbacks.find(f => f.id === historico.ultimo_id);
+    if (!ultimo) { showToast('Não há feedback anterior com texto.', 'warning'); return; }
+    const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+    const linhas = ultimo.conteudo.replace(/\r/g, '').split('\n');
+    const itens = []; let dentro = false;
+    for (const l of linhas) {
+      const s = l.trim(); const n = norm(s);
+      const ehTitulo = /^#{1,6}\s/.test(s) || /^\*\*[^*]+\*\*:?$/.test(s);
+      const ehItem = /^(\s*)([-*+•]|\d+[.)])\s+/.test(l);
+      if (/DIRECIONAMENTO|PLANO DE ACAO|PROXIMOS PASSOS|PONTOS DE DESENVOLVIMENTO|PONTO DE ATENCAO/.test(n) && !ehItem) { dentro = true; continue; }
+      if (!dentro) continue;
+      if (ehItem) itens.push(s.replace(/^([-*+•]|\d+[.)])\s+/, '').replace(/\*\*/g, '').replace(/\s*[—-]\s*$/, ''));
+      else if (ehTitulo && itens.length) dentro = /DIRECIONAMENTO|PLANO DE ACAO|PROXIMOS PASSOS/.test(n);
+    }
+    if (!itens.length) { showToast('Não encontrei direcionamentos/plano de ação no último feedback (' + ultimo.titulo + ').', 'warning'); return; }
+    inserirBloco(`**Acompanhamento do plano de ação (feedback de ${ultimo.periodo})**\n\n` +
+      itens.map(i => `- ${i} — **Status:** `).join('\n'));
+  };
+  window.fbInserirObservacoes = function(){
+    if (!historico) return;
+    const marcadas = [...document.querySelectorAll('.fbObsCheck:checked')].map(c => parseInt(c.value));
+    const obs = historico.observacoes.filter(o => marcadas.includes(o.id));
+    if (!obs.length) { showToast('Marque ao menos uma observação.', 'warning'); return; }
+    const grupo = (tom, titulo) => {
+      const l = obs.filter(o => o.tom === tom);
+      return l.length ? `**${titulo}**\n\n` + l.map(o => '- ' + o.texto.replace(/\n+/g, ' ')).join('\n') + '\n\n' : '';
+    };
+    inserirBloco(grupo('positivo', 'Evoluções observadas') + grupo('melhoria', 'Pontos que ainda precisam de atenção') + grupo('neutro', 'Outras observações do período'));
+    const box = document.getElementById('fbObsUsadas');
+    obs.forEach(o => { if (!box.querySelector(`[value="${o.id}"]`)) box.insertAdjacentHTML('beforeend', `<input type="hidden" name="obs_usadas" value="${o.id}">`); });
+  };
+  sel.addEventListener('change', carregaHistorico);
+  if (sel.value) carregaHistorico();
+
+  // avisa se sair sem salvar
+  let sujo = false;
+  document.getElementById('fbForm').addEventListener('input', () => sujo = true);
+  document.getElementById('fbForm').addEventListener('submit', () => sujo = false);
+  window.addEventListener('beforeunload', e => { if (sujo) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+{% endblock %}

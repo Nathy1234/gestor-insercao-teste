@@ -171,7 +171,7 @@
       {% endif %}
 
       {% if not somente_erp_moodle %}
-      {% if can_historico %}
+      {% if can_historico or is_admin_nav %}
       <div class="sidebar-section-block" data-section-id="gestao" {% if is_admin_nav %}draggable="true"{% endif %}>
       <div class="nav-section" onclick="toggleSidebarSection(this)">{{ handle() }}<span class="section-title">GESTÃO</span>{{ chevron() }}</div>
       <div class="sidebar-section-items">
@@ -179,6 +179,12 @@
       <a href="{{ url_for('historico') }}" class="nav-item {% if request.endpoint=='historico' %}active{% endif %}">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         Histórico
+      </a>
+      {% endif %}
+      {% if is_admin_nav %}
+      <a href="{{ url_for('feedbacks') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('feedback') %}active{% endif %}">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg>
+        Feedbacks
       </a>
       {% endif %}
       </div>

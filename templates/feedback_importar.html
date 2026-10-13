@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}Importar do Trello — Feedbacks{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+<div class="page">
+  <div style="margin-bottom:8px"><a href="{{ url_for('feedbacks') }}" class="fb-muted">← Feedbacks</a></div>
+  <div class="page-header">
+    <div>
+      <div class="page-title">Importar do Trello</div>
+      <div class="page-subtitle">No Trello: menu do quadro → Imprimir, exportar e compartilhar → Exportar como JSON.</div>
+    </div>
+  </div>
+
+  <div class="fb-aviso" style="margin-bottom:16px">
+    Os nomes dos colaboradores e os títulos dos feedbacks entram <strong>exatamente como estão no Trello</strong>.
+    Cada lista vira um colaborador; o card com o nome da pessoa vira o perfil; os demais cards viram feedbacks, com
+    checklists, comentários, etiqueta “enviado” e links dos anexos guardados junto.
+    Pode importar de novo depois: o que já foi importado é mantido como está e só entra o que for novo.
+  </div>
+
+  <form method="POST" enctype="multipart/form-data" id="fbImpForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="etapa" value="confirmar">
+    <div class="card" style="margin-bottom:16px"><div class="card-body">
+      <label style="font-weight:600;font-size:13px">Arquivo .json do Trello</label>
+      <input type="file" name="arquivo" id="fbImpArquivo" accept=".json,application/json" required style="display:block;margin-top:8px">
+      <div id="fbImpStatus" class="fb-muted" style="margin-top:8px"></div>
+    </div></div>
+
+    <div id="fbImpListas" style="display:none">
+      <div class="section-label">O que fazer com cada lista</div>
+      <div class="card"><div class="table-wrapper">
+        <table class="fb-tabela" style="min-width:760px">
+          <thead><tr><th>Lista no Trello</th><th>Cards</th><th>Importar como</th><th>Nome do colaborador</th></tr></thead>
+          <tbody id="fbImpCorpo"></tbody>
+        </table>
+      </div></div>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button type="submit" class="btn btn-primary" id="fbImpBotao">Importar</button>
+        <span class="fb-muted">Tipo (mensal/trimestral), período e tom são deduzidos pelo título, data e texto — dá para ajustar depois em cada feedback.</span>
+      </div>
+    </div>
+  </form>
+</div>
+<script>
+(function(){
+  const form = document.getElementById('fbImpForm');
+  const status = document.getElementById('fbImpStatus');
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  document.getElementById('fbImpArquivo').addEventListener('change', () => {
+    document.getElementById('fbImpListas').style.display = 'none';
+    if (!document.getElementById('fbImpArquivo').files.length) return;
+    status.textContent = 'Lendo o arquivo...';
+    const dados = new FormData(form);
+    dados.set('etapa', 'analisar');
+    fetch(form.action || location.href, {method: 'POST', body: dados, headers: {'Accept': 'application/json'}})
+      .then(r => r.json())
+      .then(d => {
+        if (d.erro) { status.textContent = d.erro; return; }
+        status.innerHTML = `Quadro <strong>${esc(d.quadro)}</strong> · ${d.listas.length} listas · ${d.total_cards} cards`;
+        document.getElementById('fbImpCorpo').innerHTML = d.listas.map(l => `
+          <tr ${l.arquivada ? 'style="opacity:.75"' : ''}>
+            <td><strong>${esc(l.nome_lista)}</strong>${l.arquivada ? ' <span class="fb-tag">arquivada no Trello → inativo</span>' : ''}
+                ${l.ja_importada ? ' <span class="fb-tag enviado">já importada — só entram cards novos</span>' : ''}</td>
+            <td>${l.total_cards}</td>
+            <td><select name="acao_${l.id}" class="filter-select" onchange="this.closest('tr').querySelector('input').disabled = this.value === 'ignorar'">
+              <option value="colaborador" ${l.sugestao === 'colaborador' ? 'selected' : ''}>Colaborador</option>
+              <option value="equipe" ${l.sugestao === 'equipe' ? 'selected' : ''}>Registros da equipe</option>
+              <option value="ignorar" ${l.sugestao === 'ignorar' ? 'selected' : ''}>Não importar</option>
+            </select></td>
+            <td><input type="text" name="nome_${l.id}" value="${esc(l.nome_colaborador)}" class="filter-select" style="width:100%"
+                 ${l.sugestao === 'ignorar' ? 'disabled' : ''} ${l.ja_importada ? 'readonly title="Já importado — renomeie na página do colaborador"' : ''}></td>
+          </tr>`).join('');
+        document.getElementById('fbImpListas').style.display = '';
+      })
+      .catch(() => { status.textContent = 'Não foi possível ler o arquivo.'; });
+  });
+  form.addEventListener('submit', () => {
+    const b = document.getElementById('fbImpBotao'); b.disabled = true; b.textContent = 'Importando...';
+  });
+})();
+</script>
+{% endblock %}

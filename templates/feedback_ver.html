@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% block title %}{{ fb.titulo }} — Feedbacks{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+<div class="page">
+  <div style="margin-bottom:8px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <a href="{{ url_for('feedback_colaborador', id=colab.id) }}" class="fb-muted">← {{ colab.nome }}</a>
+    <span class="fb-muted">
+      {% if anterior %}<a href="{{ url_for('feedback_ver', id=anterior.id) }}" title="{{ anterior.titulo }}">‹ anterior</a>{% endif %}
+      {% if anterior and proximo %} · {% endif %}
+      {% if proximo %}<a href="{{ url_for('feedback_ver', id=proximo.id) }}" title="{{ proximo.titulo }}">próximo ›</a>{% endif %}
+    </span>
+  </div>
+  <div class="page-header">
+    <div>
+      <div class="page-title">{{ fb.titulo }}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <span class="fb-tag">{{ tipos.get(fb.tipo, fb.tipo) }} · {{ fb.periodo_label }}</span>
+        <span class="fb-tag {{ fb.tom }}">{{ tons.get(fb.tom, fb.tom) }}</span>
+        {% if fb.enviado %}
+        <span class="fb-tag enviado">✓ {{ canais_dict.get(fb.enviado_canal, 'enviado') }}{% if fb.enviado_em %} em {{ fb.enviado_em.strftime('%d/%m/%Y') }}{% endif %}</span>
+        {% else %}<span class="fb-tag pendente">não enviado</span>{% endif %}
+        {% if fb.data %}<span class="fb-tag">conversa em {{ fb.data.strftime('%d/%m/%Y') }}</span>{% endif %}
+        {% if fb.origem == 'trello' %}<span class="fb-tag trello">importado do Trello</span>{% endif %}
+        {% if fb.arquivado %}<span class="fb-tag">arquivado</span>{% endif %}
+      </div>
+      {% if fb.enviado and fb.enviado_para %}<div class="fb-muted" style="margin-top:6px">Enviado para: {{ fb.enviado_para }}</div>{% endif %}
+    </div>
+    <div class="fb-acoes">
+      <a href="{{ url_for('feedback_editar', id=fb.id) }}" class="btn btn-secondary">Editar</a>
+      <a href="{{ url_for('feedback_novo', colaborador=colab.id, base=fb.id) }}" class="btn btn-secondary" title="Cria um feedback novo com este texto como ponto de partida">Usar como base</a>
+    </div>
+  </div>
+
+  <div class="fb-2col" style="display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);gap:18px;align-items:start">
+    <div>
+      <div class="fb-acoes" style="margin-bottom:10px">
+        <button type="button" class="btn btn-primary btn-sm" onclick="fbCopiarFormatado()" {% if not fb.conteudo %}disabled{% endif %}>📋 Copiar e-mail formatado</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="fbCopiar(document.getElementById('fbTextoSimples').value, 'Texto copiado.')" {% if not fb.conteudo %}disabled{% endif %}>Copiar texto simples</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="fbCopiar({{ (fb.assunto or fb.titulo)|tojson }}, 'Assunto copiado.')">Copiar assunto</button>
+        <a class="btn btn-secondary btn-sm" id="fbMailto" onclick="fbCopiarFormatado(true)"
+           href="mailto:{{ colab.email or '' }}?subject={{ (fb.assunto or fb.titulo)|urlencode }}">Copiar e abrir no meu e-mail</a>
+      </div>
+      <div class="fb-papel fb-conteudo">
+        {% if fb.conteudo %}{{ fb.conteudo|feedback_md }}{% else %}<span class="fb-muted">Sem texto registrado (no Trello o card estava vazio). Use “Editar” para escrever.</span>{% endif %}
+      </div>
+      <textarea id="fbTextoSimples" style="display:none">{{ texto_simples }}</textarea>
+      <div id="fbHtmlEmail" style="display:none">{{ html_email|safe }}</div>
+
+      {% if fb.registro_extra %}
+      <div class="section-label" style="margin-top:22px">Registros do Trello (checklists, comentários, anexos)</div>
+      <div class="fb-papel fb-conteudo" style="font-size:13px;padding:14px 18px">{{ fb.registro_extra|feedback_md }}</div>
+      {% endif %}
+
+      <div class="section-label" style="margin-top:22px" id="observacoes">Acompanhamento deste feedback / plano de ação</div>
+      <div class="card" style="margin-bottom:12px"><div class="card-body">
+        <form method="POST" action="{{ url_for('feedback_observacao_nova', id=colab.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="feedback_id" value="{{ fb.id }}">
+          <input type="hidden" name="voltar" value="feedback">
+          <textarea name="texto" rows="2" required style="width:100%" placeholder="Como evoluiu depois deste feedback? Ex: Não houve novos retornos de APA em setembro."></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+            <select name="tom" class="filter-select">
+              <option value="positivo">Evolução positiva</option>
+              <option value="melhoria">Ponto de atenção</option>
+              <option value="neutro" selected>Neutra</option>
+            </select>
+            <input type="date" name="data" value="{{ hoje.isoformat() }}" class="filter-select">
+            <button type="submit" class="btn btn-primary btn-sm">Registrar observação</button>
+          </div>
+        </form>
+      </div></div>
+      {% for o in obs %}
+      <div class="fb-obs {{ o.tom }}">
+        <span class="fb-muted">{{ o.data.strftime('%d/%m/%Y') if o.data else '' }}</span>
+        <div style="font-size:13px;white-space:pre-wrap">{{ o.texto }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:14px"><div class="card-body">
+        <div class="card-title" style="margin-bottom:10px">Enviar pelo Gestor</div>
+        <form method="POST" action="{{ url_for('feedback_enviar', id=fb.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Para</label>
+            <input type="text" name="para" value="{{ colab.email or '' }}" placeholder="email@fatecie.edu.br" required>
+          </div>
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Cópia (opcional, separe por vírgula)</label>
+            <input type="text" name="cc" value="" placeholder="gestor@fatecie.edu.br">
+          </div>
+          <div class="form-group" style="margin-bottom:8px">
+            <label>Assunto</label>
+            <input type="text" name="assunto" value="{{ fb.assunto or fb.titulo }}">
+          </div>
+          {% if meu_email %}
+          <label class="fb-muted" style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+            <input type="checkbox" name="copia_para_mim" value="1" checked> Enviar cópia para mim ({{ meu_email }})
+          </label>
+          {% endif %}
+          <button type="submit" class="btn btn-primary" style="width:100%" {% if not fb.conteudo %}disabled{% endif %}
+                  data-confirm="Enviar este feedback por e-mail agora?">
+            {{ 'Reenviar por e-mail' if fb.enviado else 'Enviar por e-mail' }}
+          </button>
+          <div class="fb-muted" style="margin-top:8px">Sai formatado (negrito, listas, títulos). Respostas do colaborador vão para o seu e-mail.</div>
+        </form>
+      </div></div>
+
+      <div class="card" style="margin-bottom:14px"><div class="card-body">
+        <div class="card-title" style="margin-bottom:6px">Entregue de outra forma?</div>
+        <div class="fb-muted" style="margin-bottom:10px">{% if fb.tipo == 'trimestral' %}O envio do trimestral pelo Gestor é opcional. {% endif %}Registre aqui se foi enviado pelo seu e-mail, Teams ou em reunião.</div>
+        <form method="POST" action="{{ url_for('feedback_marcar_enviado', id=fb.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <select name="canal" class="filter-select">
+              {% for k, v in canais if k != 'gestor' %}<option value="{{ k }}" {% if fb.enviado_canal == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+            <input type="date" name="data" value="{{ (fb.enviado_em.date() if fb.enviado_em else hoje).isoformat() }}" class="filter-select">
+          </div>
+          <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:8px">Registrar entrega</button>
+        </form>
+        {% if fb.enviado %}
+        <form method="POST" action="{{ url_for('feedback_marcar_enviado', id=fb.id) }}" style="margin-top:8px">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="desfazer" value="1">
+          <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Marcar como NÃO enviado?">Desmarcar envio</button>
+        </form>
+        {% endif %}
+      </div></div>
+
+      <div class="fb-acoes">
+        <form method="POST" action="{{ url_for('feedback_arquivar', id=fb.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-secondary btn-sm">{{ 'Desarquivar' if fb.arquivado else 'Arquivar' }}</button>
+        </form>
+        <form method="POST" action="{{ url_for('feedback_excluir', id=fb.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-danger btn-sm" data-confirm="Excluir este feedback de vez? Prefira Arquivar se quiser só tirar da frente.">Excluir</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function fbCopiar(texto, msg){
+  const ok = () => showToast(msg || 'Copiado.', 'success');
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(texto).then(ok, () => fbCopiarFallback(texto, ok));
+  } else fbCopiarFallback(texto, ok);
+}
+function fbCopiarFallback(texto, ok){
+  const t = document.createElement('textarea'); t.value = texto; t.style.position = 'fixed'; t.style.opacity = '0';
+  document.body.appendChild(t); t.select();
+  try { document.execCommand('copy'); ok(); } catch (e) { showToast('Não foi possível copiar.', 'danger'); }
+  t.remove();
+}
+// Copia com formatação (HTML) + texto puro: colando no Outlook/Gmail/Teams
+// mantém negrito e listas; em lugar que só aceita texto, cola o texto puro.
+function fbCopiarFormatado(silencioso){
+  const html = document.getElementById('fbHtmlEmail').innerHTML;
+  const texto = document.getElementById('fbTextoSimples').value;
+  const msg = silencioso ? 'E-mail copiado — cole no corpo da mensagem (Ctrl+V).' : 'E-mail formatado copiado — é só colar (Ctrl+V).';
+  if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+    navigator.clipboard.write([new ClipboardItem({
+      'text/html': new Blob([html], {type: 'text/html'}),
+      'text/plain': new Blob([texto], {type: 'text/plain'}),
+    })]).then(() => showToast(msg, 'success'), () => fbCopiarHtmlFallback(html, msg));
+  } else fbCopiarHtmlFallback(html, msg);
+}
+function fbCopiarHtmlFallback(html, msg){
+  const div = document.createElement('div');
+  div.innerHTML = html; div.style.position = 'fixed'; div.style.left = '-9999px'; div.contentEditable = 'true';
+  document.body.appendChild(div);
+  const r = document.createRange(); r.selectNodeContents(div);
+  const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  try { document.execCommand('copy'); showToast(msg, 'success'); } catch (e) { showToast('Não foi possível copiar.', 'danger'); }
+  s.removeAllRanges(); div.remove();
+}
+</script>
+{% endblock %}

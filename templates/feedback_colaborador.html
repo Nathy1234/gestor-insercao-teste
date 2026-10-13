@@ -1,0 +1,155 @@
+{% extends 'base.html' %}
+{% block title %}{{ colab.nome if colab else 'Novo colaborador' }} — Feedbacks{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+{% macro form_colab(c) %}
+<form method="POST">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="form-grid">
+    <div class="form-group">
+      <label>Nome (como no Trello) *</label>
+      <input type="text" name="nome" value="{{ c.nome if c else '' }}" required placeholder="Ex: JUNIOR">
+    </div>
+    <div class="form-group">
+      <label>Como chamar no e-mail</label>
+      <input type="text" name="nome_tratamento" value="{{ c.nome_tratamento or '' if c else '' }}" placeholder="Ex: Junior">
+    </div>
+    <div class="form-group">
+      <label>E-mail</label>
+      <input type="email" name="email" value="{{ c.email or '' if c else '' }}" placeholder="nome@fatecie.edu.br">
+    </div>
+    <div class="form-group">
+      <label>Conta no Gestor (opcional)</label>
+      <select name="usuario_id">
+        <option value="">— nenhuma —</option>
+        {% for u in usuarios %}<option value="{{ u.id }}" {% if c and c.usuario_id == u.id %}selected{% endif %}>{{ u|nome_exibicao }} ({{ u.username }})</option>{% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Vínculo</label>
+      <input type="text" name="vinculo" value="{{ c.vinculo or '' if c else '' }}" placeholder="CLT, Estágio..." list="fbVinculos">
+      <datalist id="fbVinculos"><option value="CLT"><option value="Estágio"><option value="PJ"><option value="Temporário"></datalist>
+    </div>
+    <div class="form-group">
+      <label>Contratado em</label>
+      <input type="date" name="contratado_em" value="{{ c.contratado_em.isoformat() if c and c.contratado_em else '' }}">
+    </div>
+    <div class="form-group">
+      <label>Categoria</label>
+      <select name="categoria">
+        <option value="colaborador" {% if not c or c.categoria == 'colaborador' %}selected{% endif %}>Colaborador</option>
+        <option value="equipe" {% if c and c.categoria == 'equipe' %}selected{% endif %}>Registros gerais da equipe</option>
+      </select>
+    </div>
+    <div class="form-group" style="justify-content:flex-end">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" name="ativo" value="1" {% if not c or c.ativo %}checked{% endif %} style="width:16px;height:16px"> Ativo na equipe
+      </label>
+    </div>
+    <div class="form-group full">
+      <label>Perfil / responsabilidades / horários</label>
+      <textarea name="perfil" rows="5">{{ c.perfil or '' if c else '' }}</textarea>
+    </div>
+  </div>
+  <div style="margin-top:12px"><button type="submit" class="btn btn-primary">Salvar</button></div>
+</form>
+{% endmacro %}
+
+<div class="page">
+  <div style="margin-bottom:8px"><a href="{{ url_for('feedbacks') }}" class="fb-muted">← Feedbacks</a></div>
+  {% if not colab %}
+  <div class="page-header"><div><div class="page-title">Novo colaborador</div></div></div>
+  <div class="card"><div class="card-body">{{ form_colab(None) }}</div></div>
+  {% else %}
+  <div class="page-header">
+    <div>
+      <div class="page-title">{{ colab.nome }}</div>
+      <div class="page-subtitle">
+        {{ colab.vinculo or ('Registros gerais da equipe' if colab.categoria == 'equipe' else 'Colaborador') }}
+        {% if colab.contratado_em %} · contratado em {{ colab.contratado_em.strftime('%d/%m/%Y') }}{% endif %}
+        · {{ colab.email or 'sem e-mail' }}
+        {% if not colab.ativo %} · <strong>inativo</strong>{% endif %}
+      </div>
+      {% if colab.trello_lista %}<div class="fb-muted" style="margin-top:2px">Lista no Trello: “{{ colab.trello_lista }}”</div>{% endif %}
+    </div>
+    <div class="fb-acoes">
+      <a href="{{ url_for('feedback_novo', colaborador=colab.id, tipo='mensal') }}" class="btn btn-primary">+ Feedback mensal</a>
+      <a href="{{ url_for('feedback_novo', colaborador=colab.id, tipo='trimestral') }}" class="btn btn-secondary">+ Trimestral</a>
+    </div>
+  </div>
+
+  <div class="fb-2col" style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start">
+    <div>
+      <div class="section-label">Linha do tempo ({{ fbs|length }})</div>
+      {% for f in fbs %}
+      <a href="{{ url_for('feedback_ver', id=f.id) }}" class="fb-timeline-item {% if f.arquivado %}arquivado{% endif %}">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+          <strong>{{ f.titulo }}</strong>
+          <span class="fb-muted" style="white-space:nowrap">{{ f.data.strftime('%d/%m/%Y') if f.data else '' }}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <span class="fb-tag">{{ tipos.get(f.tipo, f.tipo) }} · {{ f.periodo_label }}</span>
+          <span class="fb-tag {{ f.tom }}">{{ tons.get(f.tom, f.tom) }}</span>
+          {% if f.enviado %}<span class="fb-tag enviado">✓ {{ canais.get(f.enviado_canal, 'enviado') }}</span>{% else %}<span class="fb-tag pendente">não enviado</span>{% endif %}
+          {% if f.arquivado %}<span class="fb-tag">arquivado</span>{% endif %}
+          {% if f.origem == 'trello' %}<span class="fb-tag trello">Trello</span>{% endif %}
+        </div>
+        {% if f.conteudo %}<div class="fb-trecho">{{ f.conteudo|replace('**','')|replace('#','')|truncate(220) }}</div>{% endif %}
+      </a>
+      {% else %}
+      <div class="fb-muted">Nenhum feedback registrado.</div>
+      {% endfor %}
+    </div>
+
+    <div>
+      <div class="section-label" id="observacoes">Observações de progressão</div>
+      <div class="card" style="margin-bottom:14px"><div class="card-body">
+        <form method="POST" action="{{ url_for('feedback_observacao_nova', id=colab.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <textarea name="texto" rows="3" required placeholder="Ex: Voltou a usar o checklist antes de liberar as disciplinas."
+                    style="width:100%"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+            <select name="tom" class="filter-select">
+              <option value="positivo">Evolução positiva</option>
+              <option value="melhoria">Ponto de atenção</option>
+              <option value="neutro" selected>Neutra</option>
+            </select>
+            <input type="date" name="data" value="{{ now().date().isoformat() }}" class="filter-select">
+            <select name="feedback_id" class="filter-select" title="Plano de ação/feedback a que se refere">
+              <option value="">— geral —</option>
+              {% for f in fbs[:12] %}<option value="{{ f.id }}">{{ f.titulo|truncate(40) }}</option>{% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">Registrar</button>
+          </div>
+        </form>
+        <div class="fb-muted" style="margin-top:8px">Elas aparecem no “Puxar dados anteriores” ao escrever o próximo feedback.</div>
+      </div></div>
+      {% for o in obs %}
+      <div class="fb-obs {{ o.tom }}">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <span class="fb-muted">{{ o.data.strftime('%d/%m/%Y') if o.data else '' }}
+            {% if o.feedback %} · sobre <a href="{{ url_for('feedback_ver', id=o.feedback_id) }}">{{ o.feedback.titulo|truncate(34) }}</a>{% endif %}</span>
+          <form method="POST" action="{{ url_for('feedback_observacao_excluir', id=o.id) }}" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn-icon" title="Excluir" data-confirm="Excluir esta observação?" style="background:none;border:0;cursor:pointer;color:var(--text-muted)">×</button>
+          </form>
+        </div>
+        <div style="font-size:13px;white-space:pre-wrap">{{ o.texto }}</div>
+      </div>
+      {% else %}
+      <div class="fb-muted">Nenhuma observação ainda.</div>
+      {% endfor %}
+
+      <details style="margin-top:20px" {% if not colab.email %}open{% endif %}>
+        <summary class="section-label" style="cursor:pointer">Dados do colaborador</summary>
+        <div class="card" style="margin-top:8px"><div class="card-body">{{ form_colab(colab) }}</div></div>
+      </details>
+      {% if colab.perfil %}
+      <div class="section-label" style="margin-top:20px">Perfil</div>
+      <div class="fb-papel fb-conteudo" style="padding:14px 16px;font-size:13px">{{ colab.perfil|feedback_md }}</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

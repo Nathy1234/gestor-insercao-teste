@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}Modelos de feedback — Gestor{% endblock %}
+{% block content %}
+{% include '_feedback_estilos.html' %}
+{% macro form_item(m, tipo) %}
+<form method="POST" action="{{ url_for('feedback_modelos') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="id" value="{{ m.id if m else '' }}">
+  <input type="hidden" name="tipo" value="{{ tipo }}">
+  <div class="form-grid">
+    {% if tipo == 'modelo' %}
+    <div class="form-group full"><label>Nome do modelo</label>
+      <input type="text" name="nome" value="{{ m.nome if m else '' }}" required placeholder="Ex: Mensal — Positivo"></div>
+    <div class="form-group"><label>Para feedback</label>
+      <select name="feedback_tipo"><option value="">Qualquer tipo</option>
+        {% for k, v in tipos %}<option value="{{ k }}" {% if m and m.feedback_tipo == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select></div>
+    {% else %}
+    <div class="form-group"><label>Grupo</label>
+      <input type="text" name="grupo" value="{{ m.grupo or '' if m else '' }}" placeholder="Desempenho, Qualidade, Prazos..."></div>
+    {% endif %}
+    <div class="form-group"><label>Tom</label>
+      <select name="tom">
+        {% for k, v in tons %}<option value="{{ k }}" {% if m and m.tom == k %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select></div>
+    {% if tipo == 'modelo' %}
+    <div class="form-group full"><label>Assunto do e-mail</label>
+      <input type="text" name="assunto" value="{{ m.assunto or '' if m else '' }}" placeholder="Feedback 1:1 — {periodo} — {nome}"></div>
+    {% endif %}
+    <div class="form-group full"><label>{{ 'Texto do modelo' if tipo == 'modelo' else 'Frase' }}</label>
+      <textarea name="corpo" rows="{{ 14 if tipo == 'modelo' else 2 }}" required style="{% if tipo == 'modelo' %}font-family:Consolas,Menlo,monospace;font-size:13px{% endif %}">{{ m.corpo if m else '' }}</textarea></div>
+  </div>
+  <div style="margin-top:10px"><button type="submit" class="btn btn-primary btn-sm">Salvar</button></div>
+</form>
+{% endmacro %}
+<div class="page">
+  <div style="margin-bottom:8px"><a href="{{ url_for('feedbacks') }}" class="fb-muted">← Feedbacks</a></div>
+  <div class="page-header">
+    <div>
+      <div class="page-title">Modelos e frases sugeridas</div>
+      <div class="page-subtitle">E-mails padrão com variações por tipo e tom. Marcadores: <code>{nome}</code> <code>{periodo}</code> <code>{mes}</code> <code>{ano}</code> <code>{trimestre}</code> <code>{meses_trimestre}</code></div>
+    </div>
+  </div>
+  <div class="fb-tabs">
+    <a href="{{ url_for('feedback_modelos', aba='modelo') }}" class="fb-tab {% if aba != 'frase' %}ativo{% endif %}">Modelos de e-mail ({{ modelos|length }})</a>
+    <a href="{{ url_for('feedback_modelos', aba='frase') }}" class="fb-tab {% if aba == 'frase' %}ativo{% endif %}">Frases sugeridas ({{ frases|length }})</a>
+  </div>
+
+  {% set itens = frases if aba == 'frase' else modelos %}
+  {% set tipo = 'frase' if aba == 'frase' else 'modelo' %}
+  <details class="card" style="margin-bottom:16px"><summary class="card-body" style="cursor:pointer;font-weight:600">+ {{ 'Nova frase' if tipo == 'frase' else 'Novo modelo' }}</summary>
+    <div class="card-body" style="padding-top:0">{{ form_item(None, tipo) }}</div>
+  </details>
+
+  {% for m in itens %}
+  <details class="card" style="margin-bottom:10px">
+    <summary class="card-body" style="cursor:pointer;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      {% if tipo == 'modelo' %}
+      <strong>{{ m.nome }}</strong>
+      <span class="fb-tag">{{ dict(tipos).get(m.feedback_tipo, 'Qualquer tipo') }}</span>
+      {% else %}
+      <span style="flex:1;min-width:200px">{{ m.corpo|replace('**','') }}</span>
+      {% if m.grupo %}<span class="fb-tag">{{ m.grupo }}</span>{% endif %}
+      {% endif %}
+      {% if m.tom %}<span class="fb-tag {{ m.tom }}">{{ dict(tons).get(m.tom, m.tom) }}</span>{% endif %}
+    </summary>
+    <div class="card-body" style="padding-top:0">
+      {{ form_item(m, tipo) }}
+      <form method="POST" action="{{ url_for('feedback_modelo_excluir', id=m.id) }}" style="margin-top:8px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger btn-sm" data-confirm="Excluir este item?">Excluir</button>
+      </form>
+    </div>
+  </details>
+  {% else %}
+  <div class="fb-muted">Nada cadastrado ainda.</div>
+  {% endfor %}
+</div>
+{% endblock %}
