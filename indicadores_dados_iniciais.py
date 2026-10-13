@@ -28,6 +28,17 @@ EQUIPE_2026 = [
     ('Lucas', 'Insersor', 1500, False),
 ]
 
+# ── Mudanças de equipe no 4º trimestre de 2026 ──
+# Felipe não faz mais parte da equipe a partir do 4º/2026.
+SAIRAM_NO_4TRI_2026 = ('Felipe',)
+# Natália é gestora até 16/10/2026; Junior é avaliado como insersor até
+# 16/10 e assume a gestão (valor R$ 1.500, pelo % da equipe) a partir de 17/10.
+TROCA_GESTAO_4TRI_2026 = {
+    'sai': 'Natália', 'assume': 'Junior',
+    'ultimo_dia': '2026-10-16', 'primeiro_dia': '2026-10-17',
+    'funcao_nova': 'Gestão de Inserção', 'valor_novo': 1500,
+}
+
 # criterio: 0 Meta Diária · 1 Acompanhamento · 2 Taxa de Retorno · 3 Ferramentas
 OCORRENCIAS_3TRI_2026 = [
     {'colab': 'Junior', 'criterio': 2, 'data': '2026-07-01', 'grav': 'medio', 'status': 'Ajustado',

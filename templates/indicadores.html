@@ -1,4 +1,4 @@
-{% extends 'base.html' %}
+{% extends '_indicador_export_base.html' if exportar else 'base.html' %}
 {% block title %}Indicadores {{ t.rotulo }} — Gestor{% endblock %}
 {% block content %}
 <style>
@@ -164,6 +164,7 @@
 </style>
 
 <div class="page ind">
+  {% if not exportar %}
   <div class="ind-topo">
     <div>
       <div class="page-title">Indicadores Trimestrais</div>
@@ -183,9 +184,38 @@
         {% endif %}
       </form>
       {% endif %}
+      <a href="{{ url_for('indicador_exportar_html', id=t.id) }}" class="btn btn-secondary" title="Arquivo .html igual aos relatórios de trimestre — abre em qualquer navegador">⬇ Baixar HTML</a>
+      <button type="button" class="btn btn-secondary" onclick="document.getElementById('modalEnviarHtml').showModal()">✉ Enviar HTML</button>
       <a href="{{ url_for('indicadores_configurar_novo') }}" class="btn btn-primary">+ Novo trimestre</a>
     </div>
   </div>
+
+  <dialog class="ind-modal" id="modalEnviarHtml">
+    <form method="POST" action="{{ url_for('indicador_enviar_html', id=t.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <strong style="font-size:16px">Enviar relatório do {{ t.rotulo }}</strong>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('modalEnviarHtml').close()">Fechar</button>
+      </div>
+      <div class="form-group" style="margin-bottom:8px"><label>Para (separe por vírgula)</label>
+        <input type="text" name="para" required placeholder="coordenacao@fatecie.edu.br, ..."></div>
+      <div class="form-group" style="margin-bottom:8px"><label>Cópia (opcional)</label><input type="text" name="cc"></div>
+      <div class="form-group" style="margin-bottom:8px"><label>Assunto</label>
+        <input type="text" name="assunto" value="Relatório de Indicadores — {{ t.rotulo }} — Inserção de Materiais"></div>
+      <div class="form-group" style="margin-bottom:8px"><label>Mensagem</label>
+        <textarea name="mensagem" rows="5">Olá,
+
+Segue em anexo o relatório de indicadores da equipe de Inserção de Materiais referente ao {{ t.rotulo }}.
+É só abrir o arquivo .html em qualquer navegador.
+
+Atenciosamente,</textarea></div>
+      {% if meu_email %}<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
+        <input type="checkbox" name="copia_para_mim" value="1" checked> Enviar cópia para mim ({{ meu_email }})</label>{% endif %}
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Vai anexado o arquivo <b>INDICADORES - {{ t.trimestre }}º TRIMESTRE {{ t.ano }} - INSERÇÃO.html</b>
+        com os números atuais{% if t.status == 'aberto' %} (o trimestre ainda está <b>em aberto</b>){% endif %}.</div>
+      <button type="submit" class="btn btn-primary">Enviar</button>
+    </form>
+  </dialog>
 
   <div class="ind-tris">
     {% for x in todos %}
@@ -194,6 +224,7 @@
     </a>
     {% endfor %}
   </div>
+  {% endif %}
 
   {% if t.modelo == 'historico' %}
   {# ═══════════════════════ HISTÓRICO (regra antiga, só leitura) ═══════════════════════ #}
@@ -292,7 +323,7 @@
 
   {% else %}
   {# ═══════════════════════ POR OCORRÊNCIA (calculadora) ═══════════════════════ #}
-  {% if t.status == 'fechado' %}
+  {% if t.status == 'fechado' and not exportar %}
   <div class="ind-nota warn"><strong>Trimestre fechado.</strong> Os números abaixo são os finais. Para lançar ou corrigir ocorrências, use “Reabrir trimestre”.</div>
   {% endif %}
   <div class="ind-abas">
@@ -325,7 +356,7 @@
   <section class="ind-sec" id="sec-ocorrencias">
     <div class="ind-h2">Ocorrências do Trimestre</div>
     <div class="ind-sub">Registro de retornos por mês, com gravidade e link de referência — cada lançamento já entra no cálculo</div>
-    {% if t.status == 'aberto' %}
+    {% if t.status == 'aberto' and not exportar %}
     <details class="ind-box" style="margin-bottom:14px" {% if not dados.ocorrencias %}open{% endif %} id="novaOcBox">
       <summary style="cursor:pointer;font-weight:700">+ Registrar retorno / ocorrência</summary>
       <form method="POST" action="{{ url_for('indicador_ocorrencia_nova', id=t.id) }}" style="margin-top:12px" id="formNovaOc">
@@ -333,7 +364,7 @@
         <div class="form-grid">
           <div class="form-group"><label>Colaborador *</label>
             <select name="participante_id" required><option value="">— escolha —</option>
-              {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}</option>{% endfor %}</select></div>
+              {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}{% if c.periodo %} ({{ c.periodo }}){% endif %}</option>{% endfor %}</select></div>
           <div class="form-group"><label>Critério *</label>
             <select name="criterio" required><option value="">— escolha —</option>
               {% for c in dados.criterios %}<option value="{{ loop.index0 }}">{{ c.nome }}</option>{% endfor %}</select></div>
@@ -353,7 +384,7 @@
     <div class="chips" id="mesFiltro"></div>
     <div class="ind-tab-wrap"><table class="ind-t">
       <thead><tr><th>Data</th><th>Colaborador</th><th>Critério</th><th class="c">Gravidade</th><th class="c">Status</th><th>Descrição</th>
-        {% if t.status == 'aberto' %}<th></th>{% endif %}</tr></thead>
+        {% if t.status == 'aberto' and not exportar %}<th></th>{% endif %}</tr></thead>
       <tbody id="ocorrenciasBody"></tbody>
     </table></div>
   </section>
@@ -429,6 +460,7 @@
     </div>
   </section>
 
+  {% if not exportar %}
   <dialog class="ind-modal" id="modalEditar">
     <form method="POST" id="formEditar">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -438,7 +470,7 @@
       </div>
       <div class="form-grid">
         <div class="form-group"><label>Colaborador</label><select name="participante_id" id="edColab" required>
-          {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}</option>{% endfor %}</select></div>
+          {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}{% if c.periodo %} ({{ c.periodo }}){% endif %}</option>{% endfor %}</select></div>
         <div class="form-group"><label>Critério</label><select name="criterio" id="edCrit" required>
           {% for c in dados.criterios %}<option value="{{ loop.index0 }}">{{ c.nome }}</option>{% endfor %}</select></div>
         <div class="form-group"><label>Data</label><input type="date" name="data" id="edData" required></div>
@@ -451,6 +483,7 @@
       <button type="submit" class="btn btn-primary" style="margin-top:10px">Salvar alterações</button>
     </form>
   </dialog>
+  {% endif %}
 
   <div class="rel-overlay" id="reportOverlay"><div class="rel-sheet" id="reportSheet"></div></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -458,10 +491,11 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script>
   var DADOS = {{ dados|tojson }};
-  var EDITAVEL = {{ 'true' if t.status == 'aberto' else 'false' }};
+  var EDITAVEL = {{ 'true' if t.status == 'aberto' and not exportar else 'false' }};
+  {% if exportar %}var CSRF = "", URL_EDITAR = "", URL_EXCLUIR = "";{% else %}
   var CSRF = "{{ csrf_token() }}";
   var URL_EDITAR = "{{ url_for('indicador_ocorrencia_editar', id=0) }}".replace(/0\/editar$/, '');
-  var URL_EXCLUIR = "{{ url_for('indicador_ocorrencia_excluir', id=0) }}".replace(/0\/excluir$/, '');
+  var URL_EXCLUIR = "{{ url_for('indicador_ocorrencia_excluir', id=0) }}".replace(/0\/excluir$/, '');{% endif %}
   </script>
   <script>
 /* ===================== CONFIGURAÇÕES (iguais à calculadora do HTML) ===================== */
@@ -481,6 +515,7 @@ var SOMA_PESOS = indicadores.reduce(function (a, c) { return a + c.peso; }, 0);
 var NOMES_EQUIPE = colaboradores.filter(function (c) { return !c.equipe; }).map(function (c) { return c.nome; });
 var NOMES_EQUIPE_TXT = NOMES_EQUIPE.length > 1 ? NOMES_EQUIPE.slice(0, -1).join(", ") + " e " + NOMES_EQUIPE[NOMES_EQUIPE.length - 1] : NOMES_EQUIPE.join("");
 var AVS = ["av1", "av2", "av3", "av4", "av6", "av5"];
+var DIAS_TRI = Math.round((new Date(MESES[MESES.length - 1].fim) - new Date(DADOS.ano + "-" + MESES[0].k + "-01")) / 86400000) + 1;
 
 /* ===================== LÓGICA (igual à calculadora) ===================== */
 function fmtPct(v) { return Math.round(v * 100) + "%"; }
@@ -521,30 +556,38 @@ function calcularCiclos(leve, medio, alto) {
            doubleBonus: doubleBonus, tresGravidades: tres, levePushed: levePushed, medioPushed: medioPushed };
 }
 function badgeClass(p) { if (p === 0) return "zero"; if (p <= 0.40) return "teal"; if (p <= 0.75) return "amber"; return "red"; }
-function contar(colabId, ateData) {
+function contar(colabId, ateData, desdeData) {
   var arr = indicadores.map(function () { return { leve: 0, medio: 0, alto: 0 }; });
   ocorrencias.forEach(function (o) {
     if (o.colab !== colabId || !arr[o.ind] || !GRAV[o.grav]) return;
     if (ateData && o.data > ateData) return;
+    if (desdeData && o.data < desdeData) return;
     arr[o.ind][o.grav]++;
   });
   return arr;
 }
-function fatorEquipe(ateData) {
+var TRI_INICIO = DADOS.ano + "-" + MESES[0].k + "-01", TRI_FIM = MESES[MESES.length - 1].fim;
+// % da equipe de UM gestor: só quem estava na equipe no período dele, contando
+// só as ocorrências desse período (troca de gestão no meio do trimestre)
+function fatorEquipe(sup, ateData) {
+  var desde = sup.inicio, ate = sup.fim;
+  if (ateData && ateData < ate) ate = ateData;
+  var janela = desde > TRI_INICIO || ate < TRI_FIM;
   var rec = 0, fat = 0;
   colaboradores.forEach(function (c) {
-    if (c.equipe) return;
-    var r = calcularColaborador(c, ateData ? contar(c.id, ateData) : null, ateData);
+    if (c.equipe || c.fim < sup.inicio || c.inicio > sup.fim) return;
+    var r = calcularColaborador(c, janela ? contar(c.id, ate, desde) : null, ateData);
     rec += r.recebidoTotal; fat += r.fatiaTotal;
   });
   return fat > 0 ? rec / fat : 1;
 }
+function periodoTxt(c) { return c.periodo ? " · " + c.periodo + " (" + c.dias + " de " + DIAS_TRI + " dias)" : ""; }
 function calcularColaborador(colab, contagens, ateData) {
   var cont = contagens || colab.indicadores;
   var linhas = [], recebido = 0, fatiaTotal = 0;
   indicadores.forEach(function (ind, i) {
     var s = cont[i], r = calcularCiclos(s.leve, s.medio, s.alto);
-    var fatia = colab.valorTotal * ind.peso, perdido = fatia * r.faixa.pct;
+    var fatia = colab.valorTotal * ind.peso * colab.frac, perdido = fatia * r.faixa.pct;
     recebido += fatia - perdido; fatiaTotal += fatia;
     linhas.push({ ind: ind, s: s, r: r, faixa: r.faixa, fatia: fatia, perdido: perdido, recebido: fatia - perdido });
   });
@@ -552,7 +595,7 @@ function calcularColaborador(colab, contagens, ateData) {
   if (colab.equipe) {
     res.linhas = [];
     res.recebidoIndicadores = fatiaTotal;
-    res.fator = fatorEquipe(ateData);
+    res.fator = fatorEquipe(colab, ateData);
     res.recebidoTotal = fatiaTotal * res.fator;
     res.descontoEquipe = fatiaTotal - res.recebidoTotal;
   }
@@ -603,7 +646,7 @@ function renderVisao() {
     totRec += calc.recebidoTotal; totFat += calc.fatiaTotal;
     nOc += t.leve + t.medio + t.alto;
     if (calc.pctDescontoGeral < 0.00001) semDesc.push(c.nome);
-    rows += '<tr><td><strong>' + esc(c.nome) + '</strong></td><td style="color:var(--text-muted);font-size:12.5px">' + esc(c.funcao) + '</td>' +
+    rows += '<tr><td><strong>' + esc(c.nome) + '</strong></td><td style="color:var(--text-muted);font-size:12.5px">' + esc(c.funcao) + (c.periodo ? '<div style="font-size:11px">' + esc(c.periodo) + ' · ' + c.dias + ' de ' + DIAS_TRI + ' dias</div>' : '') + '</td>' +
       '<td class="c">' + lmaHTML(t) + '</td><td class="r">' + fmtBRL(calc.fatiaTotal) + '</td>' +
       '<td class="r" style="font-weight:800;color:var(--' + (calc.pctDescontoGeral < 0.00001 ? "ok" : calc.pctDescontoGeral <= 0.10 ? "warn" : "bad") + ')">' +
       fmtPct1(calc.pctDescontoGeral) + '<div style="font-size:11.5px;font-weight:500;color:var(--text-muted)">− ' + fmtBRL(calc.fatiaTotal - calc.recebidoTotal) + '</div></td>' +
@@ -699,13 +742,13 @@ function renderColabs() {
     });
     var resto = Math.round((1 - SOMA_PESOS) * 100);
     html += '<div class="colab-card"><div class="colab-head"><div class="av ' + AVS[ci % AVS.length] + '">' + esc(c.nome.charAt(0)) + '</div>' +
-      '<div><div class="colab-nome">' + esc(c.nome) + '</div><div class="colab-funcao">' + esc(c.funcao) + '</div></div>' +
+      '<div><div class="colab-nome">' + esc(c.nome) + '</div><div class="colab-funcao">' + esc(c.funcao) + '</div>' + (c.periodo ? '<span class="pill neutral" style="margin-top:4px">' + esc(c.periodo) + ' · ' + c.dias + ' de ' + DIAS_TRI + ' dias</span>' : '') + '</div>' +
       '<div class="colab-pct"><div class="v ' + pctClass(calc.pctDescontoGeral) + '">' + fmtPct1(1 - calc.pctDescontoGeral) + '</div><div class="s">do valor possível</div></div></div>' +
       '<div class="colab-body"><div class="meses">' + meses + '</div>' +
       (c.equipe ? '' : '<table class="mini"><thead><tr><th>Critério</th><th>L / M / A</th><th>Desc.</th><th>Recebido</th></tr></thead><tbody>' + linhas + '</tbody></table>') +
       '<div class="infos">' +
         '<div class="info"><div class="il">Total final</div><div class="iv ' + (pctClass(calc.pctDescontoGeral) || "ok") + '">' + fmtBRL(calc.recebidoTotal) + ' / ' + fmtBRL(calc.fatiaTotal) + ' — ' + fmtPct1(1 - calc.pctDescontoGeral) + '</div></div>' +
-        (c.equipe ? '<div class="info"><div class="il">Desconto pelo % da equipe</div><div class="iv ' + (calc.fator < 1 ? "warn" : "ok") + '">' + fmtBRL(c.valorTotal) + (resto ? ' − ' + resto + '%' : '') + ' = ' + fmtBRL(calc.fatiaTotal) + '<br>' + fmtBRL(calc.fatiaTotal) + ' × % equipe ' + fmtPct1(calc.fator) + ' = ' + fmtBRL(calc.recebidoTotal) + '<div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:3px">A supervisão não tem desconto por critérios próprios: os mesmos ' + resto + '% a menos de todos e depois o % da equipe (soma recebida por ' + esc(NOMES_EQUIPE_TXT) + ' ÷ soma do valor possível deles).</div></div></div>' : '') +
+        (c.equipe ? '<div class="info"><div class="il">Desconto pelo % da equipe</div><div class="iv ' + (calc.fator < 1 ? "warn" : "ok") + '">' + fmtBRL(c.valorTotal) + (resto ? ' − ' + resto + '%' : '') + (c.frac < 1 ? ' × ' + c.dias + '/' + DIAS_TRI + ' dias' : '') + ' = ' + fmtBRL(calc.fatiaTotal) + '<br>' + fmtBRL(calc.fatiaTotal) + ' × % equipe ' + fmtPct1(calc.fator) + ' = ' + fmtBRL(calc.recebidoTotal) + '<div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:3px">A supervisão não tem desconto por critérios próprios: os mesmos ' + resto + '% a menos de todos e depois o % da equipe (soma recebida pela equipe ÷ soma do valor possível dela' + (c.periodo ? ', só com as ocorrências de ' + esc(c.periodo) : '') + ').</div></div></div>' : '') +
         '<div class="info"><div class="il">Quanto afetou até o momento</div><div class="iv ' + (partes.length ? "warn" : "ok") + '">' + afetouHTML + '</div></div>' +
         '<div class="info"><div class="il">Ocorrências e gravidade</div>' + ocHTML + '</div>' +
         (gat.length ? '<div class="info"><div class="il">Próximo gatilho (se entrar mais 1)</div><ul>' + gat.join("") + '</ul></div>' : '') +
@@ -723,10 +766,10 @@ function renderCalc() {
   if (!colaboradores.length) return;
   var colab = colaboradores[activeIdx];
   document.getElementById("calcTabs").innerHTML = colaboradores.map(function (c, i) {
-    return '<button class="chip-b' + (i === activeIdx ? " ativo" : "") + '" data-i="' + i + '">' + esc(c.nome) + '</button>';
+    return '<button class="chip-b' + (i === activeIdx ? " ativo" : "") + '" data-i="' + i + '">' + esc(c.nome) + (c.periodo ? ' <small style="font-weight:500">(' + (c.equipe ? 'gestão ' : '') + esc(c.periodo) + ')</small>' : '') + '</button>';
   }).join("");
   document.querySelectorAll("#calcTabs .chip-b").forEach(function (b) { b.onclick = function () { activeIdx = +b.getAttribute("data-i"); renderCalc(); }; });
-  document.getElementById("calcNome").textContent = colab.nome;
+  document.getElementById("calcNome").textContent = colab.nome + (colab.periodo ? " — " + colab.funcao + periodoTxt(colab) : "");
   var vi = document.getElementById("valorInput");
   if (document.activeElement !== vi) vi.value = colab.valorTotal;
   vi.oninput = function () { var v = parseFloat(vi.value); colab.valorTotal = isNaN(v) || v < 0 ? 0 : v; renderCalcBody(); renderOthers(); };
@@ -745,22 +788,23 @@ function renderCalcBody() {
   var resto = Math.round((1 - SOMA_PESOS) * 100);
   if (colab.equipe) {
     document.getElementById("slices").innerHTML = "";
-    var outros = colaboradores.filter(function (c) { return !c.equipe; }).map(function (c) {
-      var r = calcularColaborador(c);
+    var janelaSup = colab.inicio > TRI_INICIO || colab.fim < TRI_FIM;
+    var outros = colaboradores.filter(function (c) { return !c.equipe && !(c.fim < colab.inicio || c.inicio > colab.fim); }).map(function (c) {
+      var r = calcularColaborador(c, janelaSup ? contar(c.id, colab.fim, colab.inicio) : null);
       return '<tr><td>' + esc(c.nome) + '</td><td class="r">' + fmtBRL(r.fatiaTotal) + '</td><td class="r">' + fmtBRL(r.recebidoTotal) + '</td><td class="r">' + fmtPct1(r.fatiaTotal ? r.recebidoTotal / r.fatiaTotal : 1) + '</td></tr>';
     }).join("");
-    document.getElementById("calcCards").innerHTML = '<div class="ccard"><div class="ccard-top"><div><p class="ccard-title">% da equipe</p><p class="ccard-weight">A supervisão perde os mesmos ' + resto + '% de todos e depois é descontada pelo % da equipe.</p></div><span class="badge2 ' + (calc.fator < 1 ? "amber" : "teal") + '">' + fmtPct1(calc.fator) + '</span></div>' +
+    document.getElementById("calcCards").innerHTML = '<div class="ccard"><div class="ccard-top"><div><p class="ccard-title">% da equipe</p><p class="ccard-weight">A supervisão perde os mesmos ' + resto + '% de todos e depois é descontada pelo % da equipe' + (colab.periodo ? ' (só ocorrências de ' + esc(colab.periodo) + ')' : '') + '.</p></div><span class="badge2 ' + (calc.fator < 1 ? "amber" : "teal") + '">' + fmtPct1(calc.fator) + '</span></div>' +
       '<div class="ind-tab-wrap"><table class="ind-t"><thead><tr><th>Colaborador</th><th class="r">Valor possível</th><th class="r">Recebido</th><th class="r">%</th></tr></thead><tbody>' + outros + '</tbody></table></div>' +
-      '<div class="footline"><span>Valor total: <b>' + fmtBRL(colab.valorTotal) + '</b></span><span>Base (−' + resto + '%): <b>' + fmtBRL(calc.fatiaTotal) + '</b></span><span>Descontado: <b>' + fmtBRL(calc.descontoEquipe) + '</b></span><span>Recebido: <b>' + fmtBRL(calc.recebidoTotal) + '</b></span></div></div>';
-    setTotal(colab, calc, fmtBRL(colab.valorTotal) + " − " + resto + "% = " + fmtBRL(calc.fatiaTotal) + " × % da equipe " + fmtPct1(calc.fator) + " = " + fmtBRL(calc.recebidoTotal) + ".");
+      '<div class="footline"><span>Valor total: <b>' + fmtBRL(colab.valorTotal) + '</b></span><span>Base (−' + resto + '%' + (colab.frac < 1 ? ', ' + colab.dias + '/' + DIAS_TRI + ' dias' : '') + '): <b>' + fmtBRL(calc.fatiaTotal) + '</b></span><span>Descontado: <b>' + fmtBRL(calc.descontoEquipe) + '</b></span><span>Recebido: <b>' + fmtBRL(calc.recebidoTotal) + '</b></span></div></div>';
+    setTotal(colab, calc, fmtBRL(colab.valorTotal) + " − " + resto + "%" + (colab.frac < 1 ? " × " + colab.dias + "/" + DIAS_TRI + " dias" : "") + " = " + fmtBRL(calc.fatiaTotal) + " × % da equipe " + fmtPct1(calc.fator) + " = " + fmtBRL(calc.recebidoTotal) + ".");
     document.getElementById("memoria").innerHTML = '<p class="linha"><b>Colaborador:</b> ' + esc(colab.nome) + ' · <b>Valor total:</b> ' + fmtBRL(colab.valorTotal) + '</p>' +
-      '<p class="linha">Base: ' + fmtBRL(colab.valorTotal) + ' − ' + resto + '% (critérios somam ' + Math.round(SOMA_PESOS * 100) + '%) = <b>' + fmtBRL(calc.fatiaTotal) + '</b>.</p>' +
+      '<p class="linha">Base: ' + fmtBRL(colab.valorTotal) + ' − ' + resto + '% (critérios somam ' + Math.round(SOMA_PESOS * 100) + '%)' + (colab.frac < 1 ? ' × ' + colab.dias + ' de ' + DIAS_TRI + ' dias como gestor(a) (' + esc(colab.periodo) + ')' : '') + ' = <b>' + fmtBRL(calc.fatiaTotal) + '</b>.</p>' +
       '<p class="linha">% da equipe = soma recebida pelos colaboradores ÷ soma do valor possível deles = <b>' + fmtPct1(calc.fator) + '</b>.</p>' +
       '<p class="linha" style="font-weight:700">' + fmtBRL(calc.fatiaTotal) + ' × ' + fmtPct1(calc.fator) + ' = ' + fmtBRL(calc.recebidoTotal) + ' (desconto de ' + fmtBRL(calc.descontoEquipe) + ').</p>';
     return;
   }
   document.getElementById("slices").innerHTML = indicadores.map(function (ind) {
-    return '<div class="slice"><p>' + esc(ind.nome) + ' (' + Math.round(ind.peso * 100) + '%)</p><b>' + fmtBRL(colab.valorTotal * ind.peso) + '</b></div>';
+    return '<div class="slice"><p>' + esc(ind.nome) + ' (' + Math.round(ind.peso * 100) + '%' + (colab.frac < 1 ? ' · ' + colab.dias + '/' + DIAS_TRI + ' dias' : '') + ')</p><b>' + fmtBRL(colab.valorTotal * ind.peso * colab.frac) + '</b></div>';
   }).join("");
   var focused = document.activeElement, fIdx = null, fGrav = null;
   if (focused && focused.getAttribute && focused.getAttribute("data-grav")) { fIdx = focused.getAttribute("data-idx"); fGrav = focused.getAttribute("data-grav"); }
@@ -804,10 +848,11 @@ function frase(nome, count, eq, pushed) {
 }
 function renderMemoria() {
   var colab = colaboradores[activeIdx], calc = calcularColaborador(colab);
-  var h = '<p class="linha"><b>Colaborador:</b> ' + esc(colab.nome) + ' · <b>Valor total do indicador:</b> ' + fmtBRL(colab.valorTotal) + '</p>';
+  var h = '<p class="linha"><b>Colaborador:</b> ' + esc(colab.nome) + ' · <b>Valor total do indicador:</b> ' + fmtBRL(colab.valorTotal) + '</p>' +
+    (colab.frac < 1 ? '<p class="linha">Atuou ' + esc(colab.periodo) + ' (' + colab.dias + ' de ' + DIAS_TRI + ' dias do trimestre) → cada fatia é proporcional: valor × peso × ' + colab.dias + '/' + DIAS_TRI + '.</p>' : '');
   calc.linhas.forEach(function (l) {
     var s = l.s, r = l.r;
-    h += '<p class="crit-title">' + esc(l.ind.nome) + '</p><p class="linha">Fatia deste critério: <b>' + fmtBRL(l.fatia) + '</b> (' + Math.round(l.ind.peso * 100) + '% do valor total).</p>';
+    h += '<p class="crit-title">' + esc(l.ind.nome) + '</p><p class="linha">Fatia deste critério: <b>' + fmtBRL(l.fatia) + '</b> (' + Math.round(l.ind.peso * 100) + '% do valor total' + (colab.frac < 1 ? ', proporcional aos dias' : '') + ').</p>';
     if (s.leve + s.medio + s.alto === 0) { h += '<p class="linha">Nenhuma ocorrência lançada. Sem desconto.</p>'; return; }
     var dl = frase("leve", s.leve, r.leveCycles, r.levePushed), dm = frase("médio", s.medio, r.medioCycles, r.medioPushed);
     if (dl) h += '<p class="linha"><b>Leves:</b> ' + dl + '.</p>';
@@ -842,7 +887,7 @@ function regrasTexto() {
   var resto = Math.round((1 - SOMA_PESOS) * 100);
   return "Leve conta a partir de 5 ocorrências, Médio a partir de 3, cada uma contando 1 a 1 depois disso. Alto tem escala própria (1-2 = 1 a 3, 3-4 = 4 a 6, 5+ = zera o indicador), sem somar com leve/médio. Leve com 3 ocorrências é empurrado com 2+ médios ou 1 alto; médio com 2 ocorrências é empurrado com 1 alto. Duas gravidades entrando naturalmente no mesmo critério somam +1 de bônus. O % de cada critério é aplicado sobre a fatia (em R$) daquele critério. Pesos: " +
     indicadores.map(function (c) { return c.nome + " " + Math.round(c.peso * 100) + "%"; }).join(", ") +
-    ". Supervisão: não tem desconto por critérios próprios; tira os mesmos " + resto + "% de todos (valor total × " + Math.round(SOMA_PESOS * 100) + "%) e o resultado é multiplicado pelo % da equipe (soma recebida pelos colaboradores ÷ soma do valor possível deles).";
+    ". Supervisão: não tem desconto por critérios próprios; tira os mesmos " + resto + "% de todos (valor total × " + Math.round(SOMA_PESOS * 100) + "%) e o resultado é multiplicado pelo % da equipe (soma recebida pelos colaboradores ÷ soma do valor possível deles). Quem atuou só parte do trimestre recebe proporcional aos dias, e o % da equipe de cada gestor considera só as ocorrências do período em que foi gestor.";
 }
 function hojeStr() { var d = new Date(); return String(d.getDate()).padStart(2, "0") + "/" + String(d.getMonth() + 1).padStart(2, "0") + "/" + d.getFullYear(); }
 function nomeArquivo(c, ext) { return "relatorio_" + DADOS.trimestre + "tri_" + DADOS.ano + "_" + c.nome.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "_") + "." + ext; }
@@ -862,7 +907,7 @@ function openReport() {
   document.getElementById("reportSheet").innerHTML =
     "<div class=\"rel-head\"><div><h2>Relatório de indicadores</h2><p>Inserção de Materiais · " + esc(DADOS.rotulo) + " · Emitido em " + hojeStr() + "</p></div>" +
     "<div class=\"rel-actions\"><button id=\"pdfBtn\">Baixar PDF</button><button id=\"excelBtn\">Baixar Excel</button><button id=\"printBtn\">Imprimir</button><button class=\"primary\" id=\"closeReportBtn\">Fechar</button></div></div>" +
-    "<p style=\"font-size:13px\"><b>Colaborador:</b> " + esc(c.nome) + " · <b>Valor total:</b> " + fmtBRL(c.valorTotal) + " · <b>Valor possível (" + indicadores.length + " critérios):</b> " + fmtBRL(calc.fatiaTotal) + "</p>" +
+    "<p style=\"font-size:13px\"><b>Colaborador:</b> " + esc(c.nome) + (c.periodo ? " (" + esc(c.funcao) + ", " + esc(c.periodo) + " — " + c.dias + " de " + DIAS_TRI + " dias)" : "") + " · <b>Valor total:</b> " + fmtBRL(c.valorTotal) + " · <b>Valor possível (" + indicadores.length + " critérios):</b> " + fmtBRL(calc.fatiaTotal) + "</p>" +
     "<table class=\"rel-t\"><thead><tr><th>Critério</th><th class=\"num\">Leve/Médio/Alto</th><th>Faixa</th><th class=\"num\">%</th><th class=\"num\">Fatia</th><th class=\"num\">Recebido</th></tr></thead><tbody>" + rows +
     (c.equipe ? "<tr><td colspan=\"5\">Base (valor total − " + resto + "%)</td><td class=\"num\">" + fmtBRL(calc.fatiaTotal) + "</td></tr><tr><td colspan=\"5\">Desconto equipe (% equipe " + fmtPct1(calc.fator) + ")</td><td class=\"num\">− " + fmtBRL(calc.descontoEquipe) + "</td></tr>" : "") +
     "<tr class=\"rel-total\"><td colspan=\"5\">Total recebido no trimestre (" + fmtPct1(calc.pctDescontoGeral) + " de desconto)</td><td class=\"num\">" + fmtBRL(calc.recebidoTotal) + "</td></tr></tbody></table>" +
@@ -882,7 +927,7 @@ function baixarPDF() {
   doc.setFontSize(15); doc.setTextColor(30, 42, 56); doc.text("Relatório de indicadores", 14, 18);
   doc.setFontSize(10); doc.setTextColor(91, 107, 124); doc.text("Inserção de Materiais · " + DADOS.rotulo + " · Emitido em " + hojeStr(), 14, 24);
   doc.setFontSize(11); doc.setTextColor(30, 42, 56);
-  doc.text("Colaborador: " + c.nome, 14, 34);
+  doc.text("Colaborador: " + c.nome + (c.periodo ? " (" + c.funcao + ", " + c.periodo + " - " + c.dias + " de " + DIAS_TRI + " dias)" : ""), 14, 34);
   doc.text("Valor total: " + fmtBRL(c.valorTotal) + "   ·   Valor possível (" + indicadores.length + " critérios): " + fmtBRL(calc.fatiaTotal), 14, 40.5);
   doc.autoTable({
     startY: 46, head: [["Critério", "Leve/Médio/Alto", "Faixa", "%", "Fatia", "Recebido"]],
@@ -909,7 +954,7 @@ function baixarExcel() {
   if (!window.XLSX) { showToast("Sem conexão para gerar o Excel.", "warning"); return; }
   var c = colaboradores[activeIdx], calc = calcularColaborador(c), resto = Math.round((1 - SOMA_PESOS) * 100);
   var data = [["Relatório de indicadores - Inserção de Materiais"], [DADOS.rotulo + " · Emitido em " + hojeStr()], [],
-    ["Colaborador", c.nome], ["Valor total", c.valorTotal], ["Valor possível (" + indicadores.length + " critérios)", calc.fatiaTotal], [],
+    ["Colaborador", c.nome + (c.periodo ? " (" + c.funcao + ", " + c.periodo + ")" : "")], ["Valor total", c.valorTotal], ["Valor possível (" + indicadores.length + " critérios)", calc.fatiaTotal], [],
     ["Critério", "Leve", "Médio", "Alto", "Faixa", "% Desconto", "Fatia (R$)", "Recebido (R$)"]];
   calc.linhas.forEach(function (l) { data.push([l.ind.nome, l.s.leve, l.s.medio, l.s.alto, l.faixa.label, l.faixa.pct, l.fatia, l.recebido]); });
   if (c.equipe) { data.push([]); data.push(["Base (valor total - " + resto + "%)", "", "", "", "", "", "", calc.fatiaTotal]); data.push(["Desconto equipe (% equipe)", "", "", "", "", calc.fator, "", -calc.descontoEquipe]); }

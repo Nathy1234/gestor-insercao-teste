@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relatório de Inserção — {{ t.rotulo }}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* Arquivo gerado pelo Gestor Acadêmico — independente, abre em qualquer navegador. */
+  :root[data-theme="light"] {
+    --bg:#f5f3ee; --surface:#ffffff; --border:#dedad0; --text:#1a1915; --text-muted:#6f6b63;
+    --primary:#2d6a4f; --primary-ring:rgba(45,106,79,.18); --primary-light:#d8f3dc; --radius:12px;
+    --header-bg:#1a1915; --header-text:#f5f3ee;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0f1117; --surface:#1c2128; --border:#30363d; --text:#e6edf3; --text-muted:#8b949e;
+    --primary:#3fb950; --primary-ring:rgba(63,185,80,.18); --primary-light:#0d2b1a; --radius:12px;
+    --header-bg:#0f1117; --header-text:#e6edf3;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'DM Sans', sans-serif; background:var(--bg); color:var(--text); min-height:100vh; transition:background .3s, color .3s; }
+  header.rel-topo { background:var(--header-bg); color:var(--header-text); padding:0 2rem; position:sticky; top:0; z-index:100;
+    display:flex; align-items:center; justify-content:space-between; height:64px; border-bottom:2px solid var(--primary); }
+  .rel-topo .esq { display:flex; align-items:center; gap:1rem; }
+  .rel-topo .ponto { width:10px; height:10px; border-radius:50%; background:var(--primary); }
+  .rel-topo h1 { font-family:'DM Serif Display', serif; font-size:1.1rem; font-weight:400; letter-spacing:.02em; }
+  .rel-topo h1 span { color:var(--primary); }
+  .rel-topo .dir { display:flex; align-items:center; gap:1rem; }
+  .badge-tri { background:var(--primary); color:#fff; font-size:.7rem; font-weight:600; padding:.25rem .75rem; border-radius:100px; letter-spacing:.05em; text-transform:uppercase; }
+  .tema-btn { background:none; border:1px solid #3a3a3a; color:var(--header-text); cursor:pointer; width:36px; height:36px; border-radius:8px; font-size:1rem; }
+  main.rel-main { max-width:1200px; margin:0 auto; padding:1.5rem 1.5rem 4rem; }
+  .page { }
+  .ind-h2 { font-family:'DM Serif Display', serif; font-weight:400 !important; font-size:1.7rem !important; }
+  .btn { font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border-radius:8px; cursor:pointer; border:1px solid var(--border);
+         background:var(--surface); color:var(--text); text-decoration:none; display:inline-flex; align-items:center; gap:6px; }
+  .btn:hover { border-color:var(--primary); color:var(--primary); }
+  .btn-primary { background:var(--text); color:var(--bg); border-color:var(--text); }
+  .btn-primary:hover { opacity:.9; color:var(--bg); }
+  .btn-sm { font-size:12px; padding:5px 10px; }
+  input[type=number], input[type=text] { font:inherit; font-size:15px; padding:8px 10px; border:1px solid var(--border); border-radius:6px;
+         background:var(--surface); color:var(--text); }
+  footer.rel-rodape { text-align:center; padding:2rem; font-size:.75rem; color:var(--text-muted); border-top:1px solid var(--border); margin-top:2rem; }
+  .app-toast { position:fixed; bottom:20px; right:20px; background:var(--text); color:var(--bg); padding:10px 16px; border-radius:8px; font-size:13px; z-index:999; }
+  @media (max-width: 640px) { header.rel-topo { padding:0 1rem; } main.rel-main { padding:1rem; } }
+</style>
+</head>
+<body>
+<header class="rel-topo">
+  <div class="esq"><div class="ponto"></div><h1>Relatório de <span>Inserção</span></h1></div>
+  <div class="dir">
+    <span class="badge-tri">{{ t.rotulo }}</span>
+    <button class="tema-btn" onclick="alternarTema()" title="Alternar tema" id="temaBtn">🌙</button>
+  </div>
+</header>
+<main class="rel-main">
+  {% block content %}{% endblock %}
+</main>
+<footer class="rel-rodape">
+  Relatório de Inserção · {{ t.rotulo }} · {{ 'Trimestre fechado' if t.status == 'fechado' else 'Trimestre em andamento' }} · Emitido em {{ emitido_em }} pelo Gestor Acadêmico
+</footer>
+<script>
+function showToast(msg) {
+  var d = document.createElement('div'); d.className = 'app-toast'; d.textContent = msg;
+  document.body.appendChild(d); setTimeout(function () { d.remove(); }, 4000);
+}
+document.addEventListener('click', function (e) {
+  var b = e.target.closest('[data-confirm]'); if (b && !confirm(b.dataset.confirm)) e.preventDefault();
+});
+function alternarTema() {
+  var h = document.documentElement, b = document.getElementById('temaBtn');
+  if (h.dataset.theme === 'light') { h.dataset.theme = 'dark'; b.textContent = '☀️'; } else { h.dataset.theme = 'light'; b.textContent = '🌙'; }
+}
+if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) alternarTema();
+</script>
+</body>
+</html>

@@ -13,8 +13,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="section-label">Equipe</div>
     <div class="card" style="margin-bottom:20px"><div class="table-wrapper">
-      <table style="min-width:760px">
-        <thead><tr><th>Ordem</th><th>Nome</th><th>Função</th><th>Valor total (R$)</th><th>Supervisão*</th><th>Remover</th></tr></thead>
+      <table style="min-width:1000px">
+        <thead><tr><th>Ordem</th><th>Nome</th><th>Função</th><th>Valor total (R$)</th><th>Atua desde</th><th>Atua até</th><th>Supervisão*</th><th>Remover</th></tr></thead>
         <tbody>
         {% for p in participantes %}
         <tr>
@@ -22,6 +22,8 @@
           <td><input type="text" name="part_nome_{{ p.id }}" value="{{ p.nome }}" required></td>
           <td><input type="text" name="part_funcao_{{ p.id }}" value="{{ p.funcao or '' }}"></td>
           <td style="width:150px"><input type="text" name="part_valor_{{ p.id }}" value="{{ '%.2f'|format(p.valor_total or 0) }}" inputmode="decimal"></td>
+          <td style="width:140px"><input type="date" name="part_inicio_{{ p.id }}" value="{{ p.inicio.isoformat() if p.inicio else '' }}"></td>
+          <td style="width:140px"><input type="date" name="part_fim_{{ p.id }}" value="{{ p.fim.isoformat() if p.fim else '' }}"></td>
           <td style="text-align:center"><input type="checkbox" name="part_sup_{{ p.id }}" value="1" {% if p.supervisao %}checked{% endif %}></td>
           <td style="text-align:center"><input type="checkbox" name="part_remover_{{ p.id }}" value="1" title="Só remove quem não tem ocorrência lançada"></td>
         </tr>
@@ -31,13 +33,17 @@
           <td><input type="text" name="novo_nome" placeholder="+ Novo colaborador"></td>
           <td><input type="text" name="novo_funcao" placeholder="Função"></td>
           <td><input type="text" name="novo_valor" placeholder="1500,00" inputmode="decimal"></td>
+          <td><input type="date" name="novo_inicio"></td>
+          <td><input type="date" name="novo_fim"></td>
           <td style="text-align:center"><input type="checkbox" name="novo_sup" value="1"></td>
           <td></td>
         </tr>
         </tbody>
       </table>
     </div></div>
-    <div style="font-size:12px;color:var(--text-muted);margin:-12px 0 20px">* Supervisão não tem desconto por critérios próprios: recebe o valor possível × % da equipe.</div>
+    <div style="font-size:12px;color:var(--text-muted);margin:-12px 0 20px">* Supervisão não tem desconto por critérios próprios: recebe o valor possível × % da equipe (medido só no período em que foi gestora).
+      “Atua desde/até” vazio = o trimestre inteiro; com datas, o valor fica proporcional aos dias. Para uma troca de função no meio do
+      trimestre, a mesma pessoa aparece em duas linhas (ex.: Junior insersor até 16/10 e Junior gestor desde 17/10).</div>
 
     <div class="section-label">Critérios e pesos</div>
     <div class="card" style="margin-bottom:12px"><div class="table-wrapper">

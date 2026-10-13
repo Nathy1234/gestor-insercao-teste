@@ -1041,10 +1041,28 @@ class IndicadorParticipante(db.Model):
     funcao       = db.Column(db.String(200))
     valor_total  = db.Column(db.Float, default=0)
     supervisao   = db.Column(db.Boolean, default=False)  # descontada pelo % da equipe
+    inicio       = db.Column(db.Date)  # vazio = desde o 1º dia do trimestre
+    fim          = db.Column(db.Date)  # vazio = até o último dia (ex: troca de gestão no meio do trimestre)
     ordem        = db.Column(db.Integer, default=0)
     historico    = db.Column(db.Text)  # JSON (trimestres fechados no modelo antigo)
 
     trimestre = db.relationship('IndicadorTrimestre', backref=db.backref('participantes', lazy='dynamic'))
+
+    def periodo(self):
+        """(início, fim, fração do trimestre) — quem atuou só parte do
+        trimestre recebe proporcional aos dias."""
+        t = self.trimestre
+        ini_t = date(t.ano, (t.trimestre - 1) * 3 + 1, 1)
+        ult_mes = t.trimestre * 3
+        fim_t = date(t.ano, ult_mes, _calendar.monthrange(t.ano, ult_mes)[1])
+        ini = max(self.inicio or ini_t, ini_t)
+        fim = min(self.fim or fim_t, fim_t)
+        total = (fim_t - ini_t).days + 1
+        return ini, fim, max(0, (fim - ini).days + 1) / total
+
+    @property
+    def periodo_parcial(self):
+        return bool(self.inicio or self.fim)
 
 class IndicadorOcorrencia(db.Model):
     id              = db.Column(db.Integer, primary_key=True)
@@ -9268,6 +9286,8 @@ def _run_migrations():
         ("mural_log", "audit_id", "INTEGER"),
         ("mural_log", "autor_nome", "VARCHAR(200)"),
         ("mural_log", "id_externo", "VARCHAR(200)"),
+        ("indicador_participante", "inicio", "DATE"),
+        ("indicador_participante", "fim", "DATE"),
     ]
     with db.engine.connect() as conn:
         if is_pg:
@@ -10575,41 +10595,104 @@ def ind_calcular_ciclos(leve, medio, alto):
 
 def ind_calcular_trimestre(trimestre, ate=None):
     """{participante_id: {'possivel', 'recebido', 'desconto_pct', 'criterios': [...]}}
-    — mesma conta da Visão Geral do HTML (supervisão pelo % da equipe)."""
+    — mesma conta da Visão Geral do HTML. Quem atuou só parte do trimestre
+    tem as fatias proporcionais aos dias; a supervisão é descontada pelo %
+    da equipe medido só no período em que foi gestora (ocorrências da
+    equipe dentro desse período)."""
     criterios = trimestre.criterios_lista()
     participantes = trimestre.participantes.order_by(IndicadorParticipante.ordem).all()
     ocorrencias = IndicadorOcorrencia.query.filter_by(trimestre_id=trimestre.id).all()
-    resultado, rec_equipe, pos_equipe = {}, 0.0, 0.0
-    for p in participantes:
+    periodos = {p.id: p.periodo() for p in participantes}
+
+    def calcula(p, desde=None, ate_=None):
         cont = [{'leve': 0, 'medio': 0, 'alto': 0} for _ in criterios]
         for o in ocorrencias:
-            if o.participante_id == p.id and 0 <= o.criterio < len(criterios) and (not ate or o.data <= ate):
+            if (o.participante_id == p.id and 0 <= o.criterio < len(criterios)
+                    and (not ate_ or o.data <= ate_) and (not desde or o.data >= desde)):
                 cont[o.criterio][o.gravidade] += 1
+        frac = periodos[p.id][2]
         linhas, recebido, possivel = [], 0.0, 0.0
         for i, c in enumerate(criterios):
             faixa = ind_calcular_ciclos(**cont[i])
-            fatia = (p.valor_total or 0) * c['peso']
+            fatia = (p.valor_total or 0) * c['peso'] * frac
             linhas.append({'nome': c['nome'], 'curto': c.get('curto') or c['nome'], 'contagem': cont[i],
                            'faixa': faixa[2], 'pct': faixa[1], 'fatia': fatia, 'recebido': fatia * (1 - faixa[1])})
             recebido += fatia * (1 - faixa[1])
             possivel += fatia
-        resultado[p.id] = {'participante': p, 'possivel': possivel, 'recebido': recebido, 'criterios': linhas}
+        return linhas, recebido, possivel
+
+    resultado = {}
+    for p in participantes:
+        linhas, recebido, possivel = calcula(p, ate_=ate)
+        resultado[p.id] = {'participante': p, 'possivel': possivel, 'recebido': recebido, 'criterios': linhas,
+                           'periodo': periodos[p.id]}
+    for p in participantes:
         if not p.supervisao:
-            rec_equipe += recebido
-            pos_equipe += possivel
-    fator = rec_equipe / pos_equipe if pos_equipe else 1
+            continue
+        ini, fim_p, _ = periodos[p.id]
+        janela_fim = min(fim_p, ate) if ate else fim_p
+        rec = pos = 0.0
+        for m in participantes:
+            if m.supervisao:
+                continue
+            m_ini, m_fim, _ = periodos[m.id]
+            if m_fim < ini or m_ini > fim_p:
+                continue  # não fazia parte da equipe enquanto essa pessoa era gestora
+            _, r_m, p_m = calcula(m, desde=ini, ate_=janela_fim)
+            rec += r_m
+            pos += p_m
+        fator = rec / pos if pos else 1
+        r = resultado[p.id]
+        r['criterios'] = []
+        r['recebido'] = r['possivel'] * fator
+        r['fator_equipe'] = fator
     for r in resultado.values():
-        if r['participante'].supervisao:
-            r['criterios'] = []
-            r['recebido'] = r['possivel'] * fator
-            r['fator_equipe'] = fator
         r['desconto_pct'] = 1 - r['recebido'] / r['possivel'] if r['possivel'] else 0
     return resultado
+
+def _ind_ajustes_equipe_4tri_2026():
+    """Mudanças de equipe do 4º/2026, aplicadas uma única vez (tanto no banco
+    que já tinha o 4º trimestre criado quanto num banco novo):
+    Felipe sai; Natália gestora até 16/10 e Junior gestor a partir de 17/10
+    (até 16/10 ele segue avaliado como insersor)."""
+    import indicadores_dados_iniciais as D
+    t = IndicadorTrimestre.query.filter_by(ano=2026, trimestre=4).first()
+    mudou = False
+    if not AppSetting.query.get('indicadores_4tri2026_sem_felipe'):
+        if t:
+            for p in t.participantes.all():
+                if p.nome in D.SAIRAM_NO_4TRI_2026 and not IndicadorOcorrencia.query.filter_by(participante_id=p.id).first():
+                    db.session.delete(p)
+        db.session.add(AppSetting(key='indicadores_4tri2026_sem_felipe', value='1'))
+        mudou = True
+    if not AppSetting.query.get('indicadores_4tri2026_troca_gestao'):
+        troca = D.TROCA_GESTAO_4TRI_2026
+        if t:
+            ultimo, primeiro = date.fromisoformat(troca['ultimo_dia']), date.fromisoformat(troca['primeiro_dia'])
+            parts = t.participantes.all()
+            sai = next((p for p in parts if p.nome == troca['sai'] and p.supervisao), None)
+            assume = next((p for p in parts if p.nome == troca['assume'] and not p.supervisao), None)
+            if sai:
+                sai.fim = ultimo
+            if assume:
+                assume.fim = ultimo
+                db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=troca['assume'], funcao=troca['funcao_nova'],
+                                                     valor_total=troca['valor_novo'], supervisao=True, inicio=primeiro))
+            # ordem: gestoras primeiro, depois a equipe na ordem que já estava
+            db.session.flush()
+            ordenados = sorted(t.participantes.all(), key=lambda p: (not p.supervisao, p.inicio or date.min, p.ordem, p.id))
+            for i, p in enumerate(ordenados):
+                p.ordem = i
+        db.session.add(AppSetting(key='indicadores_4tri2026_troca_gestao', value='1'))
+        mudou = True
+    if mudou:
+        db.session.commit()
 
 def _ind_garantir_dados_iniciais():
     """Cria uma única vez os trimestres de 2026: 1º e 2º (histórico fechado),
     3º (fechado, com as ocorrências do HTML) e 4º (aberto)."""
     if AppSetting.query.get('indicadores_dados_iniciais'):
+        _ind_ajustes_equipe_4tri_2026()
         return
     import indicadores_dados_iniciais as D
     crit = json.dumps(D.CRITERIOS_CALCULADORA, ensure_ascii=False)
@@ -10643,6 +10726,7 @@ def _ind_garantir_dados_iniciais():
                                                    descricao=o['desc'], links=json.dumps(o['links'], ensure_ascii=False)))
     db.session.add(AppSetting(key='indicadores_dados_iniciais', value='1'))
     db.session.commit()
+    _ind_ajustes_equipe_4tri_2026()
 
 def _ind_valor(texto):
     """'1.500,00' / '1500.5' / 'R$ 2.000' → float; vazio/inválido → None."""
@@ -10671,6 +10755,16 @@ def _ind_links_do_form(texto):
         links.append({'t': titulo[:80], 'u': url[:2000]})
     return links
 
+def _ind_participante_json(p):
+    ini, fim, frac = p.periodo()
+    periodo = ''
+    if p.periodo_parcial:
+        periodo = (f'desde {ini.strftime("%d/%m")}' if not p.fim else
+                   f'até {fim.strftime("%d/%m")}' if not p.inicio else f'{ini.strftime("%d/%m")} a {fim.strftime("%d/%m")}')
+    return {'id': p.id, 'nome': p.nome, 'funcao': p.funcao or '', 'valorTotal': p.valor_total or 0,
+            'equipe': bool(p.supervisao), 'inicio': ini.isoformat(), 'fim': fim.isoformat(), 'frac': frac,
+            'periodo': periodo, 'dias': (fim - ini).days + 1}
+
 def _ind_trimestre_json(t):
     """Tudo que a página precisa pra calcular no navegador (mesma regra do HTML)."""
     parts = t.participantes.order_by(IndicadorParticipante.ordem, IndicadorParticipante.id).all()
@@ -10683,8 +10777,7 @@ def _ind_trimestre_json(t):
     return {
         'id': t.id, 'rotulo': t.rotulo, 'ano': t.ano, 'trimestre': t.trimestre, 'status': t.status,
         'criterios': t.criterios_lista(), 'meses': meses,
-        'colaboradores': [{'id': p.id, 'nome': p.nome, 'funcao': p.funcao or '', 'valorTotal': p.valor_total or 0,
-                           'equipe': bool(p.supervisao)} for p in parts],
+        'colaboradores': [_ind_participante_json(p) for p in parts],
         'ocorrencias': [{'id': o.id, 'colab': o.participante_id, 'ind': o.criterio, 'data': o.data.isoformat(),
                          'grav': o.gravidade, 'status': o.status or '', 'desc': o.descricao or '',
                          'links': json.loads(o.links or '[]')} for o in ocs],
@@ -10705,15 +10798,98 @@ def indicadores():
 def indicador_trimestre(ano, tri):
     _ind_garantir_dados_iniciais()
     t = IndicadorTrimestre.query.filter_by(ano=ano, trimestre=tri).first_or_404()
-    todos = IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre).all()
-    contexto = dict(t=t, todos=todos, gravidades=IND_GRAVIDADES)
+    eu = User.query.get(session['user_id'])
+    return render_template('indicadores.html', meu_email=(eu.email if eu else ''), **_ind_contexto(t))
+
+def _ind_contexto(t, exportar=False):
+    contexto = dict(t=t, gravidades=IND_GRAVIDADES, exportar=exportar,
+                    todos=IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre).all(),
+                    emitido_em=datetime.now(_BRASIL_TZ).strftime('%d/%m/%Y'))
     if t.modelo == 'historico':
         contexto['hist'] = json.loads(t.historico or '{}')
         contexto['parts_hist'] = [json.loads(p.historico or '{}') for p in
                                   t.participantes.order_by(IndicadorParticipante.ordem).all()]
     else:
         contexto['dados'] = _ind_trimestre_json(t)
-    return render_template('indicadores.html', **contexto)
+    return contexto
+
+def _ind_html_exportado(t):
+    """(nome do arquivo, bytes) — página independente, igual aos relatórios
+    HTML de trimestre: abre em qualquer navegador, sem login e sem edição."""
+    html = render_template('indicadores.html', **_ind_contexto(t, exportar=True))
+    return f'INDICADORES - {t.trimestre}º TRIMESTRE {t.ano} - INSERÇÃO.html', html.encode('utf-8')
+
+@app.route('/gestao/indicadores/<int:id>/html')
+@admin_required
+def indicador_exportar_html(id):
+    t = IndicadorTrimestre.query.get_or_404(id)
+    nome, conteudo = _ind_html_exportado(t)
+    return send_file(io.BytesIO(conteudo), mimetype='text/html', as_attachment=True, download_name=nome)
+
+def enviar_email_anexo(destinatarios, assunto, texto, anexo_bytes, anexo_nome, tipo=('text', 'html'), cc=None, reply_to=None):
+    """E-mail com um arquivo anexado para várias pessoas (com cópia e
+    responder-para). Simula no console sem SMTP configurado, igual enviar_email."""
+    destinatarios = [d for d in destinatarios if d]
+    cc = [c for c in (cc or []) if c]
+    if not destinatarios:
+        return False
+    if not (EMAIL_SMTP_USER and EMAIL_SMTP_PASSWORD):
+        print(f'[EMAIL SIMULADO — EMAIL_SMTP_USER/PASSWORD não configurados]\nPara: {", ".join(destinatarios)}\n'
+              f'Cc: {", ".join(cc)}\nAssunto: {assunto}\nAnexo: {anexo_nome} ({len(anexo_bytes)} bytes)\n\n{texto}\n')
+        return True
+    try:
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        msg = MIMEMultipart()
+        msg['Subject'] = assunto
+        msg['From'] = f'Gestor Acadêmico <{EMAIL_SMTP_USER}>'
+        msg['To'] = ', '.join(destinatarios)
+        if cc:
+            msg['Cc'] = ', '.join(cc)
+        if reply_to:
+            msg['Reply-To'] = reply_to
+        msg.attach(MIMEText(texto, 'plain', 'utf-8'))
+        parte = MIMEBase(*tipo)
+        parte.set_payload(anexo_bytes)
+        encoders.encode_base64(parte)
+        parte.add_header('Content-Disposition', 'attachment', filename=('utf-8', '', anexo_nome))
+        msg.attach(parte)
+        with smtplib.SMTP('smtp.gmail.com', 587, timeout=20) as server:
+            server.starttls()
+            server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+            server.sendmail(EMAIL_SMTP_USER, destinatarios + cc, msg.as_string())
+        return True
+    except Exception as e:
+        print(f'[ERRO EMAIL] {e}')
+        return False
+
+@app.route('/gestao/indicadores/<int:id>/html/enviar', methods=['POST'])
+@limiter.limit('20 per hour')
+@admin_required
+def indicador_enviar_html(id):
+    t = IndicadorTrimestre.query.get_or_404(id)
+    para, invalidos = _fb_lista_emails(request.form.get('para'))
+    cc, invalidos_cc = _fb_lista_emails(request.form.get('cc'))
+    eu = User.query.get(session['user_id'])
+    if request.form.get('copia_para_mim') == '1' and eu and eu.email and eu.email not in para + cc:
+        cc.append(eu.email)
+    destino = url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre)
+    if invalidos or invalidos_cc or not para:
+        flash('Confira os e-mails: ' + (', '.join(invalidos + invalidos_cc) or 'informe ao menos um destinatário') + '.', 'danger')
+        return redirect(destino)
+    nome, conteudo = _ind_html_exportado(t)
+    assunto = (request.form.get('assunto') or '').strip() or f'Relatório de Indicadores — {t.rotulo} — Inserção de Materiais'
+    texto = (request.form.get('mensagem') or '').strip() or (
+        f'Olá,\n\nSegue em anexo o relatório de indicadores da equipe de Inserção de Materiais referente ao {t.rotulo}.\n'
+        'É só abrir o arquivo .html em qualquer navegador.\n\nAtenciosamente,')
+    if enviar_email_anexo(para, assunto[:300], texto, conteudo, nome, cc=cc, reply_to=(eu.email if eu else None)):
+        flash(f'Relatório do {t.rotulo} enviado para {", ".join(para)}.', 'success')
+    else:
+        flash('Não foi possível enviar agora. Use "Baixar HTML" e envie pelo seu e-mail.', 'danger')
+    return redirect(destino)
 
 def _ind_trimestre_editavel(t):
     if t.modelo != 'ocorrencias':
@@ -10737,6 +10913,10 @@ def _ind_ler_ocorrencia(t, o, form):
         return 'Escolha a gravidade (leve, médio ou alto).'
     if not data:
         return 'Informe a data.'
+    ini, fim, _ = part.periodo()
+    if not ini <= data <= fim:
+        return (f'{part.nome} ({part.funcao or "equipe"}) atua de {ini.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")} '
+                f'neste trimestre — confira a data ou o colaborador.')
     o.participante_id, o.criterio, o.data, o.gravidade = part.id, crit, data, grav
     o.status = (form.get('status') or '').strip()[:100] or None
     o.descricao = (form.get('descricao') or '').strip() or None
@@ -10837,11 +11017,14 @@ def indicador_configurar(id):
                 p.valor_total = valor
             p.supervisao = f.get(f'part_sup_{p.id}') == '1'
             p.ordem = _fb_int(f.get(f'part_ordem_{p.id}')) or 0
+            p.inicio = _fb_data(f.get(f'part_inicio_{p.id}'))
+            p.fim = _fb_data(f.get(f'part_fim_{p.id}'))
         novo = (f.get('novo_nome') or '').strip()
         if novo:
             valor = _ind_valor(f.get('novo_valor')) or 0
             db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=novo[:200], funcao=(f.get('novo_funcao') or '').strip()[:200],
-                                                 valor_total=valor, supervisao=f.get('novo_sup') == '1', ordem=99))
+                                                 valor_total=valor, supervisao=f.get('novo_sup') == '1', ordem=99,
+                                                 inicio=_fb_data(f.get('novo_inicio')), fim=_fb_data(f.get('novo_fim'))))
         db.session.commit()
         flash('Configuração salva — indicadores recalculados.', 'success')
         return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre))
@@ -10867,7 +11050,8 @@ def indicadores_configurar_novo():
                                criterios=base.criterios if base else json.dumps(D.CRITERIOS_CALCULADORA, ensure_ascii=False))
         db.session.add(t)
         db.session.flush()
-        origem = (base.participantes.order_by(IndicadorParticipante.ordem).all() if base else [])
+        # Só quem continuava na equipe no fim do trimestre-base (sem data de saída)
+        origem = [p for p in (base.participantes.order_by(IndicadorParticipante.ordem).all() if base else []) if not p.fim]
         for i, p in enumerate(origem):
             db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=p.nome, funcao=p.funcao, valor_total=p.valor_total,
                                                  supervisao=p.supervisao, ordem=i))
@@ -10890,7 +11074,9 @@ def feedback_api_indicadores(id):
     tris = IndicadorTrimestre.query.filter_by(modelo='ocorrencias').order_by(IndicadorTrimestre.ano.desc(),
                                                                             IndicadorTrimestre.trimestre.desc()).all()
     for t in tris:
-        part = next((p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo), None)
+        # quem tem ocorrência é a pessoa como integrante da equipe (não como gestora)
+        candidatos = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo]
+        part = next((p for p in candidatos if not p.supervisao), None) or (candidatos[0] if candidatos else None)
         if not part:
             continue
         calc = ind_calcular_trimestre(t)[part.id]
