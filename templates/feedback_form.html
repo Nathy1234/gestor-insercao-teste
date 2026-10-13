@@ -135,6 +135,7 @@
                 <div class="fb-acoes">
                   <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbPuxarPlano()">Puxar plano de ação</button>
                   <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbInserirObservacoes()">Inserir observações marcadas</button>
+                  <button type="button" class="btn btn-secondary btn-sm fbf-mini" onclick="fbPuxarIndicadores()" title="Ocorrências (leve/médio/alto) lançadas em Indicadores Trimestrais">Puxar ocorrências do trimestre</button>
                 </div>
                 <div id="fbObsLista" style="margin-top:8px"></div>
                 <div style="margin-top:6px"><a href="#" id="fbLinkObs" class="fb-muted" target="_blank">+ registrar observação</a></div>
@@ -381,6 +382,41 @@
     inserirBloco(grupo('positivo', 'Evoluções observadas') + grupo('melhoria', 'Pontos que ainda precisam de atenção') + grupo('neutro', 'Outras observações do período'));
     const box = document.getElementById('fbObsUsadas');
     obs.forEach(o => { if (!box.querySelector(`[value="${o.id}"]`)) box.insertAdjacentHTML('beforeend', `<input type="hidden" name="obs_usadas" value="${o.id}">`); });
+  };
+  // Ocorrências dos Indicadores Trimestrais — escolhe o trimestre do período do feedback
+  window.fbPuxarIndicadores = function(){
+    if (!sel.value) { showToast('Escolha o colaborador.', 'warning'); return; }
+    fetch(API + sel.value + '/indicadores', {headers: {'Accept': 'application/json'}})
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        if (!d.trimestres.length) { showToast('Esse colaborador não aparece nos Indicadores Trimestrais.', 'warning'); return; }
+        const ano = document.getElementById('fbAno').value;
+        const tri = tipo.value === 'trimestral' ? parseInt(document.getElementById('fbTri').value)
+                  : Math.ceil((parseInt(document.getElementById('fbMes').value) || 0) / 3);
+        const t = d.trimestres.find(x => x.rotulo === `${tri}º Trimestre ${ano}`) || d.trimestres[0];
+        let txt = `**Indicadores — ${t.rotulo}**${t.status === 'aberto' ? ' (em andamento)' : ''}
+
+`;
+        if (!t.ocorrencias.length) {
+          txt += 'Nenhuma ocorrência registrada no trimestre — sem desconto nos indicadores.';
+        } else {
+          txt += t.ocorrencias.map(o => `- ${o.data} · ${o.criterio} · **${o.gravidade}**${o.descricao ? ' — ' + o.descricao : ''}`).join('
+');
+          txt += t.criterios.length
+            ? '
+
+' + t.criterios.map(c => `- ${c.nome}: faixa "${c.faixa}" (${c.pct}% de desconto na fatia)`).join('
+')
+            : '
+
+As ocorrências ainda não atingiram o mínimo para gerar desconto.';
+          txt += `
+
+Resultado até o momento: **${(100 - t.desconto_pct).toLocaleString('pt-BR')}%** do valor possível.`;
+        }
+        inserirBloco(txt);
+      })
+      .catch(() => showToast('Não foi possível buscar os indicadores.', 'danger'));
   };
   sel.addEventListener('change', carregaHistorico);
   if (sel.value) carregaHistorico();

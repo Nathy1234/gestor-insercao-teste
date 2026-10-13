@@ -53,8 +53,8 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.31.0'
-NO_AR_DESDE = '28/09/2026'
+VERSAO = '1.32.0'
+NO_AR_DESDE = 'março de 2026'
 
 @app.context_processor
 def inject_versao():
@@ -1003,6 +1003,64 @@ class FeedbackModelo(db.Model):
     ordem      = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# ─── INDICADORES TRIMESTRAIS (só admin) ────────────────────────────────────────
+# Mesma regra da calculadora do "3º TRIMESTRE 2026 - INSERÇÃO.html": cada
+# retorno (ocorrência) tem critério + gravidade e o desconto de cada
+# colaborador é recalculado sozinho. Trimestres anteriores à calculadora
+# (1º e 2º/2026, regra antiga com Ponto Mais) ficam como histórico fechado
+# com os números finais exatamente como foram fechados.
+
+class IndicadorTrimestre(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    ano         = db.Column(db.Integer, nullable=False)
+    trimestre   = db.Column(db.Integer, nullable=False)
+    modelo      = db.Column(db.String(20), default='ocorrencias')  # ocorrencias | historico
+    status      = db.Column(db.String(10), default='aberto')       # aberto | fechado
+    criterios   = db.Column(db.Text)  # JSON: [{nome, curto, peso, descricao}]
+    historico   = db.Column(db.Text)  # JSON do relatório fechado (modelo historico)
+    observacoes = db.Column(db.Text)
+    fechado_em  = db.Column(db.DateTime)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('ano', 'trimestre', name='uq_indicador_trimestre'),)
+
+    @property
+    def rotulo(self):
+        return f'{self.trimestre}º Trimestre {self.ano}'
+
+    def criterios_lista(self):
+        try:
+            return json.loads(self.criterios or '[]')
+        except ValueError:
+            return []
+
+class IndicadorParticipante(db.Model):
+    id           = db.Column(db.Integer, primary_key=True)
+    trimestre_id = db.Column(db.Integer, db.ForeignKey('indicador_trimestre.id'), nullable=False, index=True)
+    nome         = db.Column(db.String(200), nullable=False)
+    funcao       = db.Column(db.String(200))
+    valor_total  = db.Column(db.Float, default=0)
+    supervisao   = db.Column(db.Boolean, default=False)  # descontada pelo % da equipe
+    ordem        = db.Column(db.Integer, default=0)
+    historico    = db.Column(db.Text)  # JSON (trimestres fechados no modelo antigo)
+
+    trimestre = db.relationship('IndicadorTrimestre', backref=db.backref('participantes', lazy='dynamic'))
+
+class IndicadorOcorrencia(db.Model):
+    id              = db.Column(db.Integer, primary_key=True)
+    trimestre_id    = db.Column(db.Integer, db.ForeignKey('indicador_trimestre.id'), nullable=False, index=True)
+    participante_id = db.Column(db.Integer, db.ForeignKey('indicador_participante.id'), nullable=False, index=True)
+    criterio        = db.Column(db.Integer, nullable=False)  # índice em IndicadorTrimestre.criterios
+    data            = db.Column(db.Date, nullable=False)
+    gravidade       = db.Column(db.String(10), nullable=False)  # leve | medio | alto
+    status          = db.Column(db.String(100))
+    descricao       = db.Column(db.Text)
+    links           = db.Column(db.Text)  # JSON: [{t, u}]
+    criado_por      = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+
+    participante = db.relationship('IndicadorParticipante')
+
 TIPOS_PERGUNTA_FORMULARIO = ('texto', 'numero', 'escala', 'multipla_escolha', 'sim_nao')
 
 class Formulario(db.Model):
@@ -1530,7 +1588,8 @@ def _resumo_mudancas(antes, depois, labels):
 
 BACKUP_MODELOS = [User, Course, Discipline, AuditLog, Coupon, Refund, ThirdPartyPayment, ErpMoodleItem,
                   Formulario, FormularioPergunta, FormularioResposta, FormularioRespostaItem,
-                  FeedbackColaborador, Feedback, FeedbackObservacao, FeedbackModelo]
+                  FeedbackColaborador, Feedback, FeedbackObservacao, FeedbackModelo,
+                  IndicadorTrimestre, IndicadorParticipante, IndicadorOcorrencia]
 
 def _serializar_valor(v):
     if isinstance(v, (datetime, date)):
@@ -10463,6 +10522,391 @@ def feedback_importar():
     flash(f'Importação concluída: {cont["colaboradores"]} colaborador(es) novo(s), {cont["feedbacks"]} feedback(s) '
           f'importado(s), {cont["pulados"]} já existiam e foram mantidos como estão.', 'success')
     return redirect(url_for('feedbacks'))
+
+
+# ─── INDICADORES TRIMESTRAIS (Gestão → Indicadores, só admin) ─────────────────
+# A regra de cálculo é a mesma da calculadora do HTML do 3º trimestre — está
+# duplicada em JS no template (indicadores.html) pra simulação ao vivo; as
+# duas versões precisam continuar iguais.
+
+IND_GRAVIDADES = [('leve', 'Leve'), ('medio', 'Médio'), ('alto', 'Alto')]
+IND_CICLO = {'leve': 5, 'medio': 3}
+IND_LEVE_PUSH_EM = 3
+IND_FAIXAS = [  # (máx. de posições, % de desconto, rótulo)
+    (0, 0.0, 'sem ocorrências'), (3, 0.20, '1 a 3'), (6, 0.40, '4 a 6'),
+    (9, 0.50, '7 a 9'), (12, 0.75, '10 a 12'), (float('inf'), 1.00, '13 em diante'),
+]
+IND_FAIXA_ALTO_ZERA = (None, 1.00, '5 em diante (zera o indicador)')
+
+def _ind_faixa(total):
+    if total <= 0:
+        return IND_FAIXAS[0]
+    return next(f for f in IND_FAIXAS[1:] if total <= f[0])
+
+def _ind_faixa_alto(alto):
+    if alto <= 0:
+        return IND_FAIXAS[0]
+    if alto <= 2:
+        return IND_FAIXAS[1]
+    if alto <= 4:
+        return IND_FAIXAS[2]
+    return IND_FAIXA_ALTO_ZERA
+
+def ind_calcular_ciclos(leve, medio, alto):
+    """Faixa de desconto de UM critério a partir da contagem de cada gravidade."""
+    leve_eq, leve_push = 0, False
+    if leve >= IND_CICLO['leve']:
+        leve_eq = leve - IND_CICLO['leve'] + 1
+    elif leve == IND_LEVE_PUSH_EM and (medio >= 2 or alto >= 1):
+        leve_eq, leve_push = 1, True
+    medio_eq, medio_push = 0, False
+    if medio >= IND_CICLO['medio']:
+        medio_eq = medio - IND_CICLO['medio'] + 1
+    elif medio == IND_CICLO['medio'] - 1 and alto >= 1:
+        medio_eq, medio_push = 1, True
+    naturais = (leve_eq >= 1 and not leve_push) + (medio_eq >= 1 and not medio_push) + (alto >= 1)
+    bonus = 1 if naturais >= 2 else 0
+    total = leve_eq + medio_eq + bonus
+    tres = leve >= 1 and medio >= 1 and alto >= 1
+    if tres:
+        total = max(total, _ind_faixa(total)[0] + 1)
+    f_lm, f_a = _ind_faixa(total), _ind_faixa_alto(alto)
+    return f_a if f_a[1] >= f_lm[1] else f_lm
+
+def ind_calcular_trimestre(trimestre, ate=None):
+    """{participante_id: {'possivel', 'recebido', 'desconto_pct', 'criterios': [...]}}
+    — mesma conta da Visão Geral do HTML (supervisão pelo % da equipe)."""
+    criterios = trimestre.criterios_lista()
+    participantes = trimestre.participantes.order_by(IndicadorParticipante.ordem).all()
+    ocorrencias = IndicadorOcorrencia.query.filter_by(trimestre_id=trimestre.id).all()
+    resultado, rec_equipe, pos_equipe = {}, 0.0, 0.0
+    for p in participantes:
+        cont = [{'leve': 0, 'medio': 0, 'alto': 0} for _ in criterios]
+        for o in ocorrencias:
+            if o.participante_id == p.id and 0 <= o.criterio < len(criterios) and (not ate or o.data <= ate):
+                cont[o.criterio][o.gravidade] += 1
+        linhas, recebido, possivel = [], 0.0, 0.0
+        for i, c in enumerate(criterios):
+            faixa = ind_calcular_ciclos(**cont[i])
+            fatia = (p.valor_total or 0) * c['peso']
+            linhas.append({'nome': c['nome'], 'curto': c.get('curto') or c['nome'], 'contagem': cont[i],
+                           'faixa': faixa[2], 'pct': faixa[1], 'fatia': fatia, 'recebido': fatia * (1 - faixa[1])})
+            recebido += fatia * (1 - faixa[1])
+            possivel += fatia
+        resultado[p.id] = {'participante': p, 'possivel': possivel, 'recebido': recebido, 'criterios': linhas}
+        if not p.supervisao:
+            rec_equipe += recebido
+            pos_equipe += possivel
+    fator = rec_equipe / pos_equipe if pos_equipe else 1
+    for r in resultado.values():
+        if r['participante'].supervisao:
+            r['criterios'] = []
+            r['recebido'] = r['possivel'] * fator
+            r['fator_equipe'] = fator
+        r['desconto_pct'] = 1 - r['recebido'] / r['possivel'] if r['possivel'] else 0
+    return resultado
+
+def _ind_garantir_dados_iniciais():
+    """Cria uma única vez os trimestres de 2026: 1º e 2º (histórico fechado),
+    3º (fechado, com as ocorrências do HTML) e 4º (aberto)."""
+    if AppSetting.query.get('indicadores_dados_iniciais'):
+        return
+    import indicadores_dados_iniciais as D
+    crit = json.dumps(D.CRITERIOS_CALCULADORA, ensure_ascii=False)
+    for tri, hist in ((1, D.HISTORICO_1TRI_2026), (2, D.HISTORICO_2TRI_2026)):
+        if IndicadorTrimestre.query.filter_by(ano=2026, trimestre=tri).first():
+            continue
+        t = IndicadorTrimestre(ano=2026, trimestre=tri, modelo='historico', status='fechado', fechado_em=datetime.utcnow(),
+                               historico=json.dumps({k: v for k, v in hist.items() if k != 'participantes'}, ensure_ascii=False))
+        db.session.add(t)
+        db.session.flush()
+        for i, p in enumerate(hist['participantes']):
+            db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=p['nome'], funcao=p['funcao'], valor_total=p['valor_total'],
+                                                 supervisao=p['supervisao'], ordem=i, historico=json.dumps(p, ensure_ascii=False)))
+    for tri, status in ((3, 'fechado'), (4, 'aberto')):
+        if IndicadorTrimestre.query.filter_by(ano=2026, trimestre=tri).first():
+            continue
+        t = IndicadorTrimestre(ano=2026, trimestre=tri, modelo='ocorrencias', status=status, criterios=crit,
+                               fechado_em=datetime.utcnow() if status == 'fechado' else None)
+        db.session.add(t)
+        db.session.flush()
+        por_nome = {}
+        for i, (nome, funcao, valor, sup) in enumerate(D.EQUIPE_2026):
+            p = IndicadorParticipante(trimestre_id=t.id, nome=nome, funcao=funcao, valor_total=valor, supervisao=sup, ordem=i)
+            db.session.add(p)
+            db.session.flush()
+            por_nome[nome] = p.id
+        if tri == 3:
+            for o in D.OCORRENCIAS_3TRI_2026:
+                db.session.add(IndicadorOcorrencia(trimestre_id=t.id, participante_id=por_nome[o['colab']], criterio=o['criterio'],
+                                                   data=date.fromisoformat(o['data']), gravidade=o['grav'], status=o['status'] or None,
+                                                   descricao=o['desc'], links=json.dumps(o['links'], ensure_ascii=False)))
+    db.session.add(AppSetting(key='indicadores_dados_iniciais', value='1'))
+    db.session.commit()
+
+def _ind_valor(texto):
+    """'1.500,00' / '1500.5' / 'R$ 2.000' → float; vazio/inválido → None."""
+    s = (texto or '').replace('R$', '').replace(' ', '').strip()
+    if not s:
+        return None
+    if ',' in s:
+        s = s.replace('.', '').replace(',', '.')
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+def _ind_links_do_form(texto):
+    """Uma por linha: "Título | https://..." ou só a URL. Só http(s)."""
+    links = []
+    for linha in (texto or '').splitlines():
+        linha = linha.strip()
+        if not linha:
+            continue
+        titulo, _, url = linha.rpartition('|') if '|' in linha else ('', '', linha)
+        url = url.strip()
+        if not _re.match(r'^https?://', url, _re.I):
+            continue
+        titulo = titulo.strip() or (urlsplit(url).hostname or 'Link').replace('www.', '')
+        links.append({'t': titulo[:80], 'u': url[:2000]})
+    return links
+
+def _ind_trimestre_json(t):
+    """Tudo que a página precisa pra calcular no navegador (mesma regra do HTML)."""
+    parts = t.participantes.order_by(IndicadorParticipante.ordem, IndicadorParticipante.id).all()
+    ocs = IndicadorOcorrencia.query.filter_by(trimestre_id=t.id).order_by(IndicadorOcorrencia.data, IndicadorOcorrencia.id).all()
+    meses = []
+    for m in range((t.trimestre - 1) * 3 + 1, (t.trimestre - 1) * 3 + 4):
+        ultimo = _calendar.monthrange(t.ano, m)[1]
+        meses.append({'k': f'{m:02d}', 'label': FB_MESES[m - 1].capitalize(), 'curto': FB_MESES[m - 1][:3].capitalize(),
+                      'fim': f'{t.ano}-{m:02d}-{ultimo:02d}'})
+    return {
+        'id': t.id, 'rotulo': t.rotulo, 'ano': t.ano, 'trimestre': t.trimestre, 'status': t.status,
+        'criterios': t.criterios_lista(), 'meses': meses,
+        'colaboradores': [{'id': p.id, 'nome': p.nome, 'funcao': p.funcao or '', 'valorTotal': p.valor_total or 0,
+                           'equipe': bool(p.supervisao)} for p in parts],
+        'ocorrencias': [{'id': o.id, 'colab': o.participante_id, 'ind': o.criterio, 'data': o.data.isoformat(),
+                         'grav': o.gravidade, 'status': o.status or '', 'desc': o.descricao or '',
+                         'links': json.loads(o.links or '[]')} for o in ocs],
+    }
+
+@app.route('/gestao/indicadores')
+@admin_required
+def indicadores():
+    _ind_garantir_dados_iniciais()
+    t = (IndicadorTrimestre.query.filter_by(status='aberto').order_by(IndicadorTrimestre.ano.desc(), IndicadorTrimestre.trimestre.desc()).first()
+         or IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano.desc(), IndicadorTrimestre.trimestre.desc()).first())
+    if not t:
+        return redirect(url_for('indicadores_configurar_novo'))
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre))
+
+@app.route('/gestao/indicadores/<int:ano>/<int:tri>')
+@admin_required
+def indicador_trimestre(ano, tri):
+    _ind_garantir_dados_iniciais()
+    t = IndicadorTrimestre.query.filter_by(ano=ano, trimestre=tri).first_or_404()
+    todos = IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre).all()
+    contexto = dict(t=t, todos=todos, gravidades=IND_GRAVIDADES)
+    if t.modelo == 'historico':
+        contexto['hist'] = json.loads(t.historico or '{}')
+        contexto['parts_hist'] = [json.loads(p.historico or '{}') for p in
+                                  t.participantes.order_by(IndicadorParticipante.ordem).all()]
+    else:
+        contexto['dados'] = _ind_trimestre_json(t)
+    return render_template('indicadores.html', **contexto)
+
+def _ind_trimestre_editavel(t):
+    if t.modelo != 'ocorrencias':
+        flash('Este trimestre é histórico (regra antiga) e não recebe ocorrências.', 'danger')
+        return False
+    if t.status != 'aberto':
+        flash('Trimestre fechado — reabra para lançar ou alterar ocorrências.', 'warning')
+        return False
+    return True
+
+def _ind_ler_ocorrencia(t, o, form):
+    part = IndicadorParticipante.query.filter_by(id=_fb_int(form.get('participante_id')) or 0, trimestre_id=t.id).first()
+    crit = _fb_int(form.get('criterio'))
+    data = _fb_data(form.get('data'))
+    grav = form.get('gravidade')
+    if not part or part.supervisao:
+        return 'Escolha o colaborador.'
+    if crit is None or not 0 <= crit < len(t.criterios_lista()):
+        return 'Escolha o critério.'
+    if grav not in dict(IND_GRAVIDADES):
+        return 'Escolha a gravidade (leve, médio ou alto).'
+    if not data:
+        return 'Informe a data.'
+    o.participante_id, o.criterio, o.data, o.gravidade = part.id, crit, data, grav
+    o.status = (form.get('status') or '').strip()[:100] or None
+    o.descricao = (form.get('descricao') or '').strip() or None
+    o.links = json.dumps(_ind_links_do_form(form.get('links')), ensure_ascii=False)
+    return None
+
+@app.route('/gestao/indicadores/<int:id>/ocorrencia', methods=['POST'])
+@admin_required
+def indicador_ocorrencia_nova(id):
+    t = IndicadorTrimestre.query.get_or_404(id)
+    if _ind_trimestre_editavel(t):
+        o = IndicadorOcorrencia(trimestre_id=t.id, criado_por=session['user_id'])
+        erro = _ind_ler_ocorrencia(t, o, request.form)
+        if erro:
+            flash(erro, 'danger')
+        else:
+            db.session.add(o)
+            db.session.commit()
+            flash('Ocorrência registrada — indicadores recalculados.', 'success')
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) + '#ocorrencias')
+
+@app.route('/gestao/indicadores/ocorrencia/<int:id>/editar', methods=['POST'])
+@admin_required
+def indicador_ocorrencia_editar(id):
+    o = IndicadorOcorrencia.query.get_or_404(id)
+    t = IndicadorTrimestre.query.get_or_404(o.trimestre_id)
+    if _ind_trimestre_editavel(t):
+        erro = _ind_ler_ocorrencia(t, o, request.form)
+        if erro:
+            db.session.rollback()
+            flash(erro, 'danger')
+        else:
+            db.session.commit()
+            flash('Ocorrência atualizada.', 'success')
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) + '#ocorrencias')
+
+@app.route('/gestao/indicadores/ocorrencia/<int:id>/excluir', methods=['POST'])
+@admin_required
+def indicador_ocorrencia_excluir(id):
+    o = IndicadorOcorrencia.query.get_or_404(id)
+    t = IndicadorTrimestre.query.get_or_404(o.trimestre_id)
+    if _ind_trimestre_editavel(t):
+        db.session.delete(o)
+        db.session.commit()
+        flash('Ocorrência excluída.', 'success')
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) + '#ocorrencias')
+
+@app.route('/gestao/indicadores/<int:id>/status', methods=['POST'])
+@admin_required
+def indicador_status(id):
+    t = IndicadorTrimestre.query.get_or_404(id)
+    if t.modelo == 'historico':
+        flash('Trimestre histórico não pode ser reaberto.', 'danger')
+    elif request.form.get('acao') == 'reabrir':
+        t.status, t.fechado_em = 'aberto', None
+        db.session.commit()
+        flash(f'{t.rotulo} reaberto.', 'success')
+    else:
+        t.status, t.fechado_em = 'fechado', datetime.utcnow()
+        db.session.commit()
+        flash(f'{t.rotulo} fechado.', 'success')
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre))
+
+@app.route('/gestao/indicadores/<int:id>/configurar', methods=['GET', 'POST'])
+@admin_required
+def indicador_configurar(id):
+    t = IndicadorTrimestre.query.get_or_404(id)
+    if t.modelo != 'ocorrencias':
+        flash('Trimestre histórico não tem configuração.', 'danger')
+        return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre))
+    if request.method == 'POST':
+        f = request.form
+        # Critério existente só é editado (nunca removido): as ocorrências
+        # guardam o índice do critério, então tirar um do meio embaralharia tudo.
+        criterios = []
+        atuais = t.criterios_lista()
+        for i in range(len(atuais) + 1):
+            antigo = atuais[i] if i < len(atuais) else None
+            nome = (f.get(f'crit_nome_{i}') or '').strip() or (antigo or {}).get('nome', '')
+            if not nome:
+                continue
+            peso = _ind_valor(f.get(f'crit_peso_{i}'))
+            peso = (antigo or {}).get('peso', 0) if peso is None else peso / 100
+            criterios.append({'nome': nome[:120], 'curto': ((f.get(f'crit_curto_{i}') or '').strip() or nome)[:40],
+                              'peso': max(0.0, min(peso, 1.0)), 'descricao': (f.get(f'crit_desc_{i}') or '').strip()})
+        t.criterios = json.dumps(criterios, ensure_ascii=False)
+        for p in t.participantes.all():
+            if f.get(f'part_remover_{p.id}') == '1':
+                if IndicadorOcorrencia.query.filter_by(participante_id=p.id).first():
+                    flash(f'{p.nome} tem ocorrências lançadas e não foi removido.', 'warning')
+                else:
+                    db.session.delete(p)
+                continue
+            p.nome = (f.get(f'part_nome_{p.id}') or p.nome).strip()[:200]
+            p.funcao = (f.get(f'part_funcao_{p.id}') or '').strip()[:200]
+            valor = _ind_valor(f.get(f'part_valor_{p.id}'))
+            if valor is not None:
+                p.valor_total = valor
+            p.supervisao = f.get(f'part_sup_{p.id}') == '1'
+            p.ordem = _fb_int(f.get(f'part_ordem_{p.id}')) or 0
+        novo = (f.get('novo_nome') or '').strip()
+        if novo:
+            valor = _ind_valor(f.get('novo_valor')) or 0
+            db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=novo[:200], funcao=(f.get('novo_funcao') or '').strip()[:200],
+                                                 valor_total=valor, supervisao=f.get('novo_sup') == '1', ordem=99))
+        db.session.commit()
+        flash('Configuração salva — indicadores recalculados.', 'success')
+        return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre))
+    return render_template('indicador_configurar.html', t=t, criterios=t.criterios_lista(),
+                           participantes=t.participantes.order_by(IndicadorParticipante.ordem, IndicadorParticipante.id).all())
+
+@app.route('/gestao/indicadores/novo', methods=['GET', 'POST'])
+@admin_required
+def indicadores_configurar_novo():
+    """Abre um trimestre novo copiando critérios e equipe do último trimestre por ocorrência."""
+    base = IndicadorTrimestre.query.filter_by(modelo='ocorrencias').order_by(IndicadorTrimestre.ano.desc(),
+                                                                            IndicadorTrimestre.trimestre.desc()).first()
+    if request.method == 'POST':
+        ano, tri = _fb_int(request.form.get('ano')), _fb_int(request.form.get('trimestre'))
+        if not ano or tri not in (1, 2, 3, 4):
+            flash('Informe ano e trimestre.', 'danger')
+            return redirect(url_for('indicadores_configurar_novo'))
+        if IndicadorTrimestre.query.filter_by(ano=ano, trimestre=tri).first():
+            flash('Esse trimestre já existe.', 'warning')
+            return redirect(url_for('indicador_trimestre', ano=ano, tri=tri))
+        import indicadores_dados_iniciais as D
+        t = IndicadorTrimestre(ano=ano, trimestre=tri, modelo='ocorrencias', status='aberto',
+                               criterios=base.criterios if base else json.dumps(D.CRITERIOS_CALCULADORA, ensure_ascii=False))
+        db.session.add(t)
+        db.session.flush()
+        origem = (base.participantes.order_by(IndicadorParticipante.ordem).all() if base else [])
+        for i, p in enumerate(origem):
+            db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=p.nome, funcao=p.funcao, valor_total=p.valor_total,
+                                                 supervisao=p.supervisao, ordem=i))
+        db.session.commit()
+        flash(f'{t.rotulo} aberto com a equipe e os critérios de {base.rotulo if base else "padrão"}. Confira em Configurar.', 'success')
+        return redirect(url_for('indicador_trimestre', ano=ano, tri=tri))
+    hoje = date.today()
+    ult = IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano.desc(), IndicadorTrimestre.trimestre.desc()).first()
+    prox_ano, prox_tri = ((ult.ano + (ult.trimestre == 4), ult.trimestre % 4 + 1) if ult else (hoje.year, _fb_trimestre_de(hoje.month)))
+    return render_template('indicador_novo.html', base=base, prox_ano=prox_ano, prox_tri=prox_tri)
+
+@app.route('/gestao/feedbacks/api/colaborador/<int:id>/indicadores')
+@admin_required
+def feedback_api_indicadores(id):
+    """Ocorrências do colaborador nos trimestres por ocorrência (pelo primeiro
+    nome) — pro botão "Puxar ocorrências do trimestre" no editor de feedback."""
+    c = FeedbackColaborador.query.get_or_404(id)
+    alvo = _norm_name(((c.nome_email or c.nome or '').split() or [''])[0])
+    saida = []
+    tris = IndicadorTrimestre.query.filter_by(modelo='ocorrencias').order_by(IndicadorTrimestre.ano.desc(),
+                                                                            IndicadorTrimestre.trimestre.desc()).all()
+    for t in tris:
+        part = next((p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo), None)
+        if not part:
+            continue
+        calc = ind_calcular_trimestre(t)[part.id]
+        crits = t.criterios_lista()
+        ocs = IndicadorOcorrencia.query.filter_by(participante_id=part.id).order_by(IndicadorOcorrencia.data).all()
+        saida.append({
+            'rotulo': t.rotulo, 'status': t.status,
+            'desconto_pct': round(calc['desconto_pct'] * 100, 1),
+            'recebido': round(calc['recebido'], 2), 'possivel': round(calc['possivel'], 2),
+            'criterios': [{'nome': l['nome'], 'faixa': l['faixa'], 'pct': round(l['pct'] * 100), 'contagem': l['contagem']}
+                          for l in calc['criterios'] if l['pct'] > 0],
+            'ocorrencias': [{'data': o.data.strftime('%d/%m/%Y'), 'criterio': crits[o.criterio]['curto'] if o.criterio < len(crits) else '?',
+                             'gravidade': dict(IND_GRAVIDADES).get(o.gravidade, o.gravidade), 'descricao': o.descricao or ''}
+                            for o in ocs],
+        })
+    return jsonify({'trimestres': saida})
 
 
 @app.errorhandler(Exception)

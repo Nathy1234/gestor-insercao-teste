@@ -26,6 +26,12 @@ document.addEventListener('click', e => {
 // Preferência pessoal de cada um (não é permissão nem ordem) — fica salva
 // só neste navegador. Por padrão a seção que contém a página atual já
 // abre expandida, as outras ficam fechadas, pra poluir menos a tela.
+// Recolhe/mostra o menu lateral inteiro (tela cheia) — lembrado entre páginas
+function alternarMenuLateral() {
+  const recolhido = document.documentElement.classList.toggle('menu-recolhido');
+  try { localStorage.setItem('menuRecolhido', recolhido ? '1' : '0'); } catch (e) {}
+}
+
 function toggleSidebarSection(header) {
   const bloco = header.closest('.sidebar-section-block');
   if (!bloco) return;

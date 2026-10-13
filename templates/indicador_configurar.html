@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block title %}Configurar {{ t.rotulo }} — Indicadores{% endblock %}
+{% block content %}
+<div class="page">
+  <div style="margin-bottom:8px"><a href="{{ url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) }}" style="font-size:13px;color:var(--text-muted)">← {{ t.rotulo }}</a></div>
+  <div class="page-header">
+    <div>
+      <div class="page-title">Configurar {{ t.rotulo }}</div>
+      <div class="page-subtitle">Equipe, valor total de cada pessoa e peso dos critérios. Tudo é recalculado ao salvar.</div>
+    </div>
+  </div>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="section-label">Equipe</div>
+    <div class="card" style="margin-bottom:20px"><div class="table-wrapper">
+      <table style="min-width:760px">
+        <thead><tr><th>Ordem</th><th>Nome</th><th>Função</th><th>Valor total (R$)</th><th>Supervisão*</th><th>Remover</th></tr></thead>
+        <tbody>
+        {% for p in participantes %}
+        <tr>
+          <td style="width:70px"><input type="number" name="part_ordem_{{ p.id }}" value="{{ p.ordem }}" style="width:60px"></td>
+          <td><input type="text" name="part_nome_{{ p.id }}" value="{{ p.nome }}" required></td>
+          <td><input type="text" name="part_funcao_{{ p.id }}" value="{{ p.funcao or '' }}"></td>
+          <td style="width:150px"><input type="text" name="part_valor_{{ p.id }}" value="{{ '%.2f'|format(p.valor_total or 0) }}" inputmode="decimal"></td>
+          <td style="text-align:center"><input type="checkbox" name="part_sup_{{ p.id }}" value="1" {% if p.supervisao %}checked{% endif %}></td>
+          <td style="text-align:center"><input type="checkbox" name="part_remover_{{ p.id }}" value="1" title="Só remove quem não tem ocorrência lançada"></td>
+        </tr>
+        {% endfor %}
+        <tr style="background:var(--primary-light)">
+          <td></td>
+          <td><input type="text" name="novo_nome" placeholder="+ Novo colaborador"></td>
+          <td><input type="text" name="novo_funcao" placeholder="Função"></td>
+          <td><input type="text" name="novo_valor" placeholder="1500,00" inputmode="decimal"></td>
+          <td style="text-align:center"><input type="checkbox" name="novo_sup" value="1"></td>
+          <td></td>
+        </tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div style="font-size:12px;color:var(--text-muted);margin:-12px 0 20px">* Supervisão não tem desconto por critérios próprios: recebe o valor possível × % da equipe.</div>
+
+    <div class="section-label">Critérios e pesos</div>
+    <div class="card" style="margin-bottom:12px"><div class="table-wrapper">
+      <table style="min-width:760px">
+        <thead><tr><th>#</th><th>Nome</th><th>Nome curto</th><th>Peso (%)</th><th>O que avalia</th></tr></thead>
+        <tbody>
+        {% for c in criterios %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><input type="text" name="crit_nome_{{ loop.index0 }}" value="{{ c.nome }}" required></td>
+          <td><input type="text" name="crit_curto_{{ loop.index0 }}" value="{{ c.curto }}"></td>
+          <td style="width:100px"><input type="text" name="crit_peso_{{ loop.index0 }}" value="{{ (c.peso * 100)|round(1)|string|replace('.0','') }}" inputmode="decimal" class="crit-peso"></td>
+          <td><input type="text" name="crit_desc_{{ loop.index0 }}" value="{{ c.descricao or '' }}"></td>
+        </tr>
+        {% endfor %}
+        <tr style="background:var(--primary-light)">
+          <td>+</td>
+          <td><input type="text" name="crit_nome_{{ criterios|length }}" placeholder="+ Novo critério"></td>
+          <td><input type="text" name="crit_curto_{{ criterios|length }}"></td>
+          <td><input type="text" name="crit_peso_{{ criterios|length }}" placeholder="0" inputmode="decimal" class="crit-peso"></td>
+          <td><input type="text" name="crit_desc_{{ criterios|length }}"></td>
+        </tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div style="font-size:12.5px;margin-bottom:18px">Soma dos pesos: <strong id="somaPesos"></strong>
+      <span style="color:var(--text-muted)">— o que faltar para 100% não entra em nenhum critério (no 3º trimestre: 90%, os 10% restantes ficam de fora). Critérios existentes não podem ser removidos porque as ocorrências apontam para eles.</span></div>
+    <button type="submit" class="btn btn-primary">Salvar configuração</button>
+  </form>
+</div>
+<script>
+function somaPesos() {
+  var s = 0;
+  document.querySelectorAll('.crit-peso').forEach(function (i) { var v = parseFloat((i.value || '0').replace(',', '.')); if (!isNaN(v)) s += v; });
+  document.getElementById('somaPesos').textContent = (Math.round(s * 10) / 10).toLocaleString('pt-BR') + '%';
+}
+document.querySelectorAll('.crit-peso').forEach(function (i) { i.addEventListener('input', somaPesos); });
+somaPesos();
+</script>
+{% endblock %}

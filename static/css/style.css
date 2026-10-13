@@ -195,6 +195,22 @@ body {
 .logout-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
 .logout-btn:hover { background: rgba(220,38,38,.12); color: #ef4444; }
 
+/* ── MENU LATERAL RECOLHÍVEL (tela cheia) ── */
+.menu-recolhido .sidebar { display: none; }
+.menu-recolher-btn {
+  margin-left: auto; background: none; border: 1px solid var(--sidebar-border); color: var(--sidebar-text);
+  width: 26px; height: 26px; border-radius: 7px; cursor: pointer; font-size: 15px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.menu-recolher-btn:hover { color: #fff; background: var(--sidebar-hover); }
+.menu-abrir-btn {
+  background: color-mix(in srgb, var(--surface) 86%, transparent); border: 1px solid var(--border); color: var(--text);
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.menu-abrir-btn svg { width: 18px; height: 18px; }
+.menu-abrir-btn:hover { border-color: var(--primary); color: var(--primary); }
+
 /* ── MAIN ── */
 .main-content {
   flex: 1; overflow-y: auto; overflow-x: hidden;

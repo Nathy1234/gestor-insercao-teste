@@ -1,0 +1,954 @@
+{% extends 'base.html' %}
+{% block title %}Indicadores {{ t.rotulo }} — Gestor{% endblock %}
+{% block content %}
+<style>
+  .ind { --ok:#16a34a; --ok-bg:rgba(22,163,74,.13); --warn:#d97706; --warn-bg:rgba(217,119,6,.14);
+         --bad:#dc2626; --bad-bg:rgba(220,38,38,.12); --azul:#2563eb; --azul-bg:rgba(37,99,235,.10); }
+  .ind-topo { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start; margin-bottom:14px; }
+  .ind-tris { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+  .ind-tri { text-decoration:none; border:1px solid var(--border); background:var(--surface); color:var(--text);
+             padding:6px 12px; border-radius:999px; font-size:12.5px; font-weight:600; display:inline-flex; gap:6px; align-items:center; }
+  .ind-tri.ativo { border-color:var(--primary); box-shadow:0 0 0 2px var(--primary-ring); }
+  .ind-tri small { font-weight:600; font-size:10.5px; padding:1px 6px; border-radius:999px; }
+  .ind-tri small.aberto { background:var(--ok-bg); color:var(--ok); }
+  .ind-tri small.fechado { background:var(--border); color:var(--text-muted); }
+  .ind-abas { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:18px; overflow-x:auto; }
+  .ind-aba { padding:9px 14px; font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; border:0; background:none;
+             border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  .ind-aba.ativo { color:var(--primary); border-bottom-color:var(--primary); }
+  .ind-sec { display:none; } .ind-sec.ativo { display:block; }
+  .ind-h2 { font-size:20px; font-weight:700; margin-bottom:2px; }
+  .ind-sub { font-size:13px; color:var(--text-muted); margin-bottom:16px; }
+  .ind-box { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; }
+  .ind-geral { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin-bottom:14px; }
+  .ind-geral .big { font-size:42px; font-weight:800; color:var(--ok); line-height:1; }
+  .ind-geral h3 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:4px; }
+  .ind-geral p { font-size:13px; color:var(--text-muted); max-width:560px; }
+  .ind-barra { height:6px; background:var(--border); border-radius:99px; overflow:hidden; max-width:280px; margin-top:8px; }
+  .ind-barra > div { height:100%; background:var(--ok); border-radius:99px; }
+  .ind-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:12px; margin-bottom:18px; }
+  .ind-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; border-left-width:3px; }
+  .ind-card.green { border-left-color:var(--ok); } .ind-card.orange { border-left-color:var(--warn); }
+  .ind-card.blue { border-left-color:var(--azul); } .ind-card.red { border-left-color:var(--bad); }
+  .ind-card .l { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:6px; }
+  .ind-card .v { font-size:26px; font-weight:800; line-height:1.1; }
+  .ind-card .s { font-size:12px; color:var(--text-muted); margin-top:4px; }
+  .ind-tab-wrap { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow-x:auto; }
+  table.ind-t { width:100%; border-collapse:collapse; font-size:13px; }
+  table.ind-t th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); font-weight:700;
+                   padding:9px 12px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  table.ind-t td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+  table.ind-t tr:last-child td { border-bottom:0; }
+  table.ind-t tfoot td { font-weight:700; border-top:2px solid var(--text); border-bottom:0; }
+  table.ind-t .c { text-align:center; } table.ind-t .r { text-align:right; }
+  table.ind-t td.desc { font-size:12.5px; color:var(--text-muted); line-height:1.5; min-width:260px; }
+  .pill { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; white-space:nowrap; }
+  .pill.ok { background:var(--ok-bg); color:var(--ok); } .pill.warn { background:var(--warn-bg); color:var(--warn); }
+  .pill.bad { background:var(--bad-bg); color:var(--bad); } .pill.neutral { background:var(--border); color:var(--text-muted); }
+  .lk { display:inline-flex; gap:4px; font-size:11.5px; font-weight:600; color:var(--azul); text-decoration:none; border:1px solid var(--border);
+        border-radius:6px; padding:2px 8px; margin:5px 5px 0 0; }
+  .lk:hover { border-color:var(--azul); }
+  .ind-div { display:flex; align-items:center; gap:10px; margin:24px 0 12px; }
+  .ind-div h3 { font-size:15px; font-weight:700; white-space:nowrap; } .ind-div .ln { flex:1; height:1px; background:var(--border); }
+  .ind-nota { background:var(--azul-bg); border-left:3px solid var(--azul); border-radius:0 8px 8px 0; padding:10px 14px; font-size:13px; margin:12px 0; line-height:1.55; }
+  .ind-nota.warn { background:var(--warn-bg); border-left-color:var(--warn); }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .chip-b { border:1px solid var(--border); background:var(--surface); color:var(--text-muted); font:inherit; font-size:12.5px; font-weight:600;
+            padding:5px 12px; border-radius:999px; cursor:pointer; }
+  .chip-b.ativo { background:var(--text); color:var(--bg); border-color:var(--text); }
+  .colab-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:16px; }
+  .colab-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
+  .colab-head { padding:14px 16px 12px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
+  .av { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:16px; flex-shrink:0; }
+  .av1{background:#2d6a4f}.av2{background:#1a5276}.av3{background:#76448a}.av4{background:#17614e}.av5{background:#935116}.av6{background:#7b3f61}
+  .colab-nome { font-weight:700; } .colab-funcao { font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+  .colab-pct { margin-left:auto; text-align:right; } .colab-pct .v { font-size:22px; font-weight:800; color:var(--ok); line-height:1; }
+  .colab-pct .v.warn { color:var(--warn); } .colab-pct .v.bad { color:var(--bad); } .colab-pct .s { font-size:11px; color:var(--text-muted); }
+  .colab-body { padding:12px 16px; flex:1; }
+  .meses { display:flex; gap:6px; flex-wrap:wrap; }
+  .mes { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:5px 10px; font-size:12px; }
+  .mes b { display:block; } .mes span { font-size:11px; color:var(--text-muted); }
+  table.mini { width:100%; border-collapse:collapse; margin-top:12px; font-size:12.5px; }
+  table.mini th { font-size:10.5px; text-transform:uppercase; color:var(--text-muted); text-align:left; padding:5px 6px; border-bottom:1px solid var(--border); }
+  table.mini td { padding:6px; border-bottom:1px solid var(--border); vertical-align:top; } table.mini tr:last-child td { border-bottom:0; }
+  .lma { white-space:nowrap; font-variant-numeric:tabular-nums; } .lma .l{color:var(--ok)} .lma .m{color:var(--warn)} .lma .a{color:var(--bad)}
+  .infos { display:flex; flex-direction:column; gap:7px; margin-top:12px; }
+  .info { background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:8px 10px; }
+  .info .il { font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); margin-bottom:3px; }
+  .info .iv { font-size:13px; font-weight:600; line-height:1.45; } .info .iv.ok{color:var(--ok)} .info .iv.warn{color:var(--warn)} .info .iv.bad{color:var(--bad)}
+  .info ul { list-style:none; font-size:12.5px; color:var(--text-muted); line-height:1.55; padding:0; margin:0; }
+  .info li + li { margin-top:5px; padding-top:5px; border-top:1px dashed var(--border); }
+  .colab-foot { padding:10px 16px; border-top:1px solid var(--border); display:flex; gap:8px; flex-wrap:wrap; }
+  .colab-links { padding:10px 16px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:6px; }
+  .colab-links .nota { font-size:11.5px; color:var(--text-muted); font-style:italic; }
+  /* calculadora */
+  .calc-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  .name-row { display:flex; gap:22px; margin-bottom:16px; flex-wrap:wrap; align-items:flex-end; }
+  .name-row label { font-size:12px; color:var(--text-muted); font-weight:600; display:block; margin-bottom:4px; }
+  .name-row input { width:180px; font-weight:700; }
+  .slices { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:16px; }
+  .slice { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 12px; }
+  .slice p { font-size:11px; color:var(--text-muted); margin:0; } .slice b { font-size:14px; }
+  .viewtabs { display:flex; gap:18px; margin-bottom:16px; border-bottom:1px solid var(--border); }
+  .viewtab { padding:8px 2px; border:0; background:none; font:inherit; font-size:13px; font-weight:700; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; }
+  .viewtab.ativo { color:var(--text); border-bottom-color:var(--text); }
+  .ccard { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin-bottom:12px; }
+  .ccard-top { display:flex; justify-content:space-between; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+  .ccard-title { font-size:15px; font-weight:700; margin:0; } .ccard-weight { font-size:12px; color:var(--text-muted); margin:2px 0 0; }
+  .badge2 { font-size:12px; font-weight:700; padding:4px 10px; border-radius:20px; white-space:nowrap; }
+  .badge2.teal{background:var(--ok-bg);color:var(--ok)} .badge2.amber{background:var(--warn-bg);color:var(--warn)}
+  .badge2.red{background:var(--bad-bg);color:var(--bad)} .badge2.zero{background:var(--border);color:var(--text-muted)}
+  .inputs { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .field label { display:block; font-size:12px; margin-bottom:4px; font-weight:700; }
+  .field.leve label{color:var(--ok)} .field.medio label{color:var(--warn)} .field.alto label{color:var(--bad)}
+  .field input { width:100%; }
+  .footline { margin-top:10px; font-size:12.5px; color:var(--text-muted); display:flex; gap:16px; flex-wrap:wrap; } .footline b { color:var(--text); }
+  .breakdown { margin-top:8px; font-size:11.5px; color:var(--text-muted); background:var(--bg); border-radius:6px; padding:8px 10px; line-height:1.5; }
+  .memoria p.linha { font-size:13px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 13px; margin:0 0 7px; line-height:1.6; }
+  .memoria .crit-title { font-size:14px; font-weight:700; margin:16px 0 7px; }
+  .total-box { margin-top:20px; background:#1e2a38; color:#f5f3ee; border-radius:10px; padding:18px 20px; }
+  .total-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; flex-wrap:wrap; gap:10px; }
+  .total-label { font-size:12.5px; letter-spacing:.04em; text-transform:uppercase; opacity:.75; }
+  .total-value { font-size:26px; font-weight:800; } .total-sub { font-size:13px; opacity:.85; }
+  .bar-track { height:10px; background:rgba(255,255,255,.15); border-radius:6px; overflow:hidden; }
+  .bar-fill { height:100%; background:#e3b04b; border-radius:6px; transition:width .25s; }
+  .total-note { font-size:12.5px; opacity:.7; margin-top:10px; }
+  .reset-row { margin-top:14px; display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+  .sim-aviso { display:none; } .sim-aviso.on { display:block; }
+  /* critérios */
+  .regras h3 { font-size:14px; margin:18px 0 7px; } .regras h3:first-child { margin-top:0; }
+  .regras p, .regras ul { font-size:13px; color:var(--text-muted); line-height:1.65; margin:0 0 8px; }
+  .regras ul { padding-left:18px; }
+  table.rt { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:10px; }
+  table.rt th { text-align:left; color:var(--text-muted); font-weight:700; padding:6px 8px; border-bottom:1px solid var(--border); font-size:11px; text-transform:uppercase; }
+  table.rt td { padding:6px 8px; border-bottom:1px solid var(--border); } table.rt .num { text-align:right; }
+  .ex { background:var(--ok-bg); color:var(--ok); border-radius:8px; padding:9px 13px; font-size:12.5px; margin-bottom:6px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:4px; }
+  .dot.l{background:var(--ok)} .dot.m{background:var(--warn)} .dot.a{background:var(--bad)}
+  .crit-grupo { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:14px; }
+  .crit-grupo summary { padding:12px 16px; font-weight:700; cursor:pointer; background:var(--bg); }
+  .crit-item { padding:12px 16px; border-top:1px solid var(--border); display:grid; grid-template-columns:1.3fr 1fr auto; gap:14px; font-size:13px; }
+  .crit-item .n { font-size:10.5px; font-weight:800; text-transform:uppercase; color:var(--ok); }
+  .crit-item .d { color:var(--text-muted); font-size:12.5px; line-height:1.5; }
+  .crit-item .p { background:var(--ok-bg); color:var(--ok); font-weight:800; font-size:12px; padding:4px 10px; border-radius:8px; align-self:start; }
+  /* lançamento */
+  .grav-op { display:flex; gap:6px; }
+  .grav-op label { flex:1; text-align:center; border:1px solid var(--border); border-radius:8px; padding:8px 6px; cursor:pointer; font-weight:700; font-size:13px; }
+  .grav-op input { display:none; }
+  .grav-op label.leve:has(input:checked) { background:var(--ok-bg); color:var(--ok); border-color:var(--ok); }
+  .grav-op label.medio:has(input:checked) { background:var(--warn-bg); color:var(--warn); border-color:var(--warn); }
+  .grav-op label.alto:has(input:checked) { background:var(--bad-bg); color:var(--bad); border-color:var(--bad); }
+  dialog.ind-modal { border:1px solid var(--border); border-radius:14px; background:var(--surface); color:var(--text); padding:20px 22px; width:min(640px,94vw); }
+  dialog.ind-modal::backdrop { background:rgba(0,0,0,.45); }
+  /* relatório */
+  .rel-overlay { position:fixed; inset:0; background:rgba(30,42,56,.55); display:none; align-items:flex-start; justify-content:center; padding:40px 16px; z-index:500; overflow-y:auto; }
+  .rel-overlay.open { display:flex; }
+  .rel-sheet { background:#fff; color:#1e2a38; max-width:780px; width:100%; border-radius:10px; padding:30px 34px; }
+  .rel-head { display:flex; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .rel-head h2 { font-size:19px; margin:0 0 4px; } .rel-head p { font-size:13px; color:#5b6b7c; margin:0; }
+  .rel-actions button { border:1px solid #dedad0; background:none; color:#5b6b7c; font:inherit; font-size:12.5px; padding:6px 12px; border-radius:6px; cursor:pointer; margin:0 0 6px 6px; }
+  .rel-actions button.primary { background:#1e2a38; color:#f5f3ee; border-color:#1e2a38; }
+  table.rel-t { width:100%; border-collapse:collapse; font-size:12.5px; margin:12px 0 18px; }
+  table.rel-t th { text-align:left; background:#efece4; padding:7px 9px; font-size:11px; text-transform:uppercase; color:#5b6b7c; }
+  table.rel-t td { padding:7px 9px; border-top:1px solid #dedad0; vertical-align:top; } table.rel-t .num { text-align:right; }
+  .rel-total td { font-weight:700; border-top:2px solid #1e2a38; background:#f8f3e7; }
+  .rel-sheet h3 { font-size:14px; margin:6px 0 4px; } .rel-sheet .rp { font-size:12px; color:#5b6b7c; line-height:1.6; }
+  @media (max-width: 720px) { .colab-grid { grid-template-columns:1fr; } .slices { grid-template-columns:repeat(2,1fr); }
+    .crit-item { grid-template-columns:1fr; } }
+  @media print {
+    body * { visibility:hidden; }
+    .rel-sheet, .rel-sheet * { visibility:visible; }
+    .rel-overlay { position:absolute; inset:0; background:none; padding:0; display:flex !important; }
+    .rel-actions { display:none; }
+  }
+</style>
+
+<div class="page ind">
+  <div class="ind-topo">
+    <div>
+      <div class="page-title">Indicadores Trimestrais</div>
+      <div class="page-subtitle">Retornos por gravidade e cálculo automático do desconto · visível só para administradores</div>
+    </div>
+    <div class="fb-acoes" style="display:flex;gap:8px;flex-wrap:wrap">
+      {% if t.modelo == 'ocorrencias' %}
+      <a href="{{ url_for('indicador_configurar', id=t.id) }}" class="btn btn-secondary">Configurar equipe e pesos</a>
+      <form method="POST" action="{{ url_for('indicador_status', id=t.id) }}" style="margin:0">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if t.status == 'aberto' %}
+        <input type="hidden" name="acao" value="fechar">
+        <button type="submit" class="btn btn-secondary" data-confirm="Fechar o {{ t.rotulo }}? As ocorrências ficam travadas (dá para reabrir depois).">Fechar trimestre</button>
+        {% else %}
+        <input type="hidden" name="acao" value="reabrir">
+        <button type="submit" class="btn btn-secondary" data-confirm="Reabrir o {{ t.rotulo }} para lançar ou corrigir ocorrências?">Reabrir trimestre</button>
+        {% endif %}
+      </form>
+      {% endif %}
+      <a href="{{ url_for('indicadores_configurar_novo') }}" class="btn btn-primary">+ Novo trimestre</a>
+    </div>
+  </div>
+
+  <div class="ind-tris">
+    {% for x in todos %}
+    <a href="{{ url_for('indicador_trimestre', ano=x.ano, tri=x.trimestre) }}" class="ind-tri {% if x.id == t.id %}ativo{% endif %}">
+      {{ x.trimestre }}º Tri {{ x.ano }} <small class="{{ x.status }}">{{ 'em aberto' if x.status == 'aberto' else 'fechado' }}</small>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if t.modelo == 'historico' %}
+  {# ═══════════════════════ HISTÓRICO (regra antiga, só leitura) ═══════════════════════ #}
+  <div class="ind-nota warn">
+    <strong>Trimestre fechado — regra antiga (5 indicadores, com Ponto Mais).</strong>
+    Números finais exatamente como foram fechados no relatório; não há ocorrências para recalcular.
+  </div>
+  <div class="ind-abas">
+    <button class="ind-aba ativo" data-aba="visao">Visão Geral</button>
+    <button class="ind-aba" data-aba="colaboradores">Colaboradores</button>
+    <button class="ind-aba" data-aba="criterios">Critérios</button>
+  </div>
+
+  <section class="ind-sec ativo" id="sec-visao">
+    <div class="ind-h2">Visão Geral da Equipe</div>
+    <div class="ind-sub">{{ t.rotulo }} · {{ hist.subtitulo }}</div>
+    <div class="ind-box ind-geral">
+      <div class="big">{{ hist.pct_equipe }}</div>
+      <div><h3>Desempenho Geral da Equipe</h3><p>{{ hist.pct_equipe_desc }}</p>
+        <div class="ind-barra"><div style="width:{{ hist.pct_equipe_num }}%"></div></div></div>
+    </div>
+    <div class="ind-cards">
+      {% for c in hist.cards %}
+      <div class="ind-card {{ c.cor }}"><div class="l">{{ c.label }}</div><div class="v">{{ c.valor }}</div><div class="s">{{ c.sub }}</div></div>
+      {% endfor %}
+    </div>
+    <div class="ind-div"><h3>Resumo por Colaborador</h3><div class="ln"></div></div>
+    <div class="ind-tab-wrap"><table class="ind-t">
+      <thead><tr><th>Colaborador</th><th>Função</th><th class="c">% Atingido</th><th class="c">Valor Final</th>
+        {% if hist.tem_demandas %}<th class="c">Demandas</th>{% endif %}<th class="c">Status</th></tr></thead>
+      <tbody>
+      {% for p in parts_hist %}
+      <tr><td><strong>{{ p.nome }}</strong></td><td style="color:var(--text-muted)">{{ p.funcao_curta }}</td>
+        <td class="c" style="font-weight:800;color:var(--{{ p.pct_cls }})">{{ p.pct }}</td><td class="c">{{ p.valor_final }}</td>
+        {% if hist.tem_demandas %}<td class="c">{{ p.demandas }}</td>{% endif %}
+        <td class="c"><span class="pill {{ p.status_cls }}">{{ p.status }}</span></td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% if hist.escalas %}
+    <div class="ind-div"><h3>Escala Geral de Ocorrências</h3><div class="ln"></div></div>
+    <div class="ind-nota"><strong>Como funcionava:</strong> para a maioria dos indicadores (exceto Ponto), o desconto seguia a tabela abaixo.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+      <div class="ind-box"><table class="rt"><thead><tr><th>Ocorrências</th><th>Desconto</th><th>Situação</th></tr></thead><tbody>
+        <tr><td>1 a 3</td><td>20%</td><td><span class="pill ok">Leve</span></td></tr><tr><td>4 a 6</td><td>40%</td><td><span class="pill warn">Moderado</span></td></tr>
+        <tr><td>7 a 9</td><td>50%</td><td><span class="pill warn">Alto</span></td></tr><tr><td>10 a 12</td><td>75%</td><td><span class="pill bad">Crítico</span></td></tr>
+        <tr><td>13 ou mais</td><td>100%</td><td><span class="pill bad">Máximo</span></td></tr></tbody></table></div>
+      <div class="ind-box"><table class="rt"><thead><tr><th>Ponto — ocorrências</th><th>Desconto</th><th>Situação</th></tr></thead><tbody>
+        <tr><td>1 a 3</td><td>0%</td><td><span class="pill ok">Tolerável</span></td></tr><tr><td>4 a 7</td><td>25%</td><td><span class="pill warn">Atenção</span></td></tr>
+        <tr><td>8 a 11</td><td>50%</td><td><span class="pill bad">Alto</span></td></tr><tr><td>12 ou mais</td><td>100%</td><td><span class="pill bad">Máximo</span></td></tr></tbody></table></div>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="ind-sec" id="sec-colaboradores">
+    <div class="ind-h2">Indicadores por Colaborador</div>
+    <div class="ind-sub">Relatório final detalhado · {{ t.rotulo }}</div>
+    <div class="colab-grid">
+      {% for p in parts_hist %}
+      <div class="colab-card">
+        <div class="colab-head"><div class="av av{{ loop.index }}">{{ p.nome[0] }}</div>
+          <div><div class="colab-nome">{{ p.nome }}</div><div class="colab-funcao">{{ p.funcao }}</div></div>
+          <div class="colab-pct"><div class="v {{ '' if p.pct_cls == 'ok' else p.pct_cls }}">{{ p.pct }}</div></div></div>
+        <div class="colab-body">
+          <div class="meses">{% for m in p.meses %}<div class="mes"><b>{{ hist.meses[loop.index0] }}</b><span>{{ m }}</span></div>{% endfor %}</div>
+          <table class="mini"><thead><tr><th>Indicador</th><th>Valor ref. · Peso</th><th>% Meta</th><th>Resultado</th></tr></thead><tbody>
+            {% for i in p.indicadores %}<tr><td>{{ i.nome }}</td><td>{{ i.ref }}</td><td>{{ i.pct }}</td><td><span class="pill {{ i.cls }}">{{ i.resultado }}</span></td></tr>{% endfor %}
+          </tbody></table>
+          <div class="infos">{% for i in p.infos %}<div class="info"><div class="il">{{ i.label }}</div><div class="iv {{ i.cls }}">{{ i.val }}</div></div>{% endfor %}</div>
+        </div>
+        {% if p.links %}
+        <div class="colab-links"><div class="il" style="font-size:10.5px;font-weight:800;text-transform:uppercase;color:var(--text-muted)">🔗 Referências</div>
+          {% for l in p.links %}<a class="lk" href="{{ l.u }}" target="_blank" rel="noopener">{{ l.icone }} {{ l.t }}</a>{% endfor %}
+          {% if p.nota_links %}<div class="nota">{{ p.nota_links }}</div>{% endif %}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if hist.nota_colaboradores %}<div class="ind-nota" style="margin-top:16px"><strong>Nota:</strong> {{ hist.nota_colaboradores }}</div>{% endif %}
+  </section>
+
+  <section class="ind-sec" id="sec-criterios">
+    <div class="ind-h2">Critérios de Avaliação</div>
+    <div class="ind-sub">Indicadores utilizados no cálculo da meta trimestral</div>
+    <div class="ind-nota">{{ hist.criterios_nota }}</div>
+    {% for g in hist.grupos_criterios %}
+    <div class="ind-div"><h3>{{ g.secao }}</h3><div class="ln"></div></div>
+    <details class="crit-grupo" open><summary>{{ g.icone }} {{ g.titulo }}</summary>
+      {% for i in g.itens %}
+      <div class="crit-item"><div><div class="n">Indicador {{ loop.index }}</div><strong>{{ i.titulo }}</strong><div class="d">{{ i.desc }}</div></div>
+        <div class="d">{{ i.escala|replace(' · ', '<br>')|safe }}</div><div class="p">Peso {{ i.peso }}</div></div>
+      {% endfor %}
+    </details>
+    {% endfor %}
+  </section>
+
+  {% else %}
+  {# ═══════════════════════ POR OCORRÊNCIA (calculadora) ═══════════════════════ #}
+  {% if t.status == 'fechado' %}
+  <div class="ind-nota warn"><strong>Trimestre fechado.</strong> Os números abaixo são os finais. Para lançar ou corrigir ocorrências, use “Reabrir trimestre”.</div>
+  {% endif %}
+  <div class="ind-abas">
+    <button class="ind-aba ativo" data-aba="visao">Visão Geral</button>
+    <button class="ind-aba" data-aba="ocorrencias">Ocorrências</button>
+    <button class="ind-aba" data-aba="colaboradores">Colaboradores</button>
+    <button class="ind-aba" data-aba="calculadora">Calculadora</button>
+    <button class="ind-aba" data-aba="criterios">Critérios</button>
+  </div>
+
+  <div class="ind-nota warn sim-aviso" id="simAviso">
+    <strong>Simulação ativa:</strong> você alterou números na Calculadora — as abas mostram a simulação, não o registrado.
+    <button type="button" class="btn btn-secondary btn-sm" onclick="restaurarTodos()" style="margin-left:8px">Voltar ao registrado</button>
+  </div>
+
+  <section class="ind-sec ativo" id="sec-visao">
+    <div class="ind-h2">Visão Geral da Equipe</div>
+    <div class="ind-sub" id="visaoSub"></div>
+    <div class="ind-box ind-geral" id="equipeGeral"></div>
+    <div class="ind-cards" id="statCards"></div>
+    <div class="ind-div"><h3>Resumo por Colaborador</h3><div class="ln"></div></div>
+    <div class="ind-tab-wrap"><table class="ind-t">
+      <thead><tr><th>Colaborador</th><th>Função</th><th class="c">Leve / Médio / Alto</th><th class="r">Valor possível</th>
+        <th class="r">Desconto</th><th class="r">Valor final</th><th class="c">Status</th></tr></thead>
+      <tbody id="resumoBody"></tbody><tfoot id="resumoFoot"></tfoot>
+    </table></div>
+    <div class="ind-nota warn" id="notaPesos"></div>
+  </section>
+
+  <section class="ind-sec" id="sec-ocorrencias">
+    <div class="ind-h2">Ocorrências do Trimestre</div>
+    <div class="ind-sub">Registro de retornos por mês, com gravidade e link de referência — cada lançamento já entra no cálculo</div>
+    {% if t.status == 'aberto' %}
+    <details class="ind-box" style="margin-bottom:14px" {% if not dados.ocorrencias %}open{% endif %} id="novaOcBox">
+      <summary style="cursor:pointer;font-weight:700">+ Registrar retorno / ocorrência</summary>
+      <form method="POST" action="{{ url_for('indicador_ocorrencia_nova', id=t.id) }}" style="margin-top:12px" id="formNovaOc">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-grid">
+          <div class="form-group"><label>Colaborador *</label>
+            <select name="participante_id" required><option value="">— escolha —</option>
+              {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}</option>{% endfor %}</select></div>
+          <div class="form-group"><label>Critério *</label>
+            <select name="criterio" required><option value="">— escolha —</option>
+              {% for c in dados.criterios %}<option value="{{ loop.index0 }}">{{ c.nome }}</option>{% endfor %}</select></div>
+          <div class="form-group"><label>Data *</label><input type="date" name="data" required value="{{ now().date().isoformat() }}"></div>
+          <div class="form-group"><label>Status</label><input type="text" name="status" list="statusOpcoes" placeholder="Ajustado, Pendente..."></div>
+          <div class="form-group full"><label>Gravidade *</label>
+            <div class="grav-op">{% for k, v in gravidades %}<label class="{{ k }}"><input type="radio" name="gravidade" value="{{ k }}" required> {{ v }}</label>{% endfor %}</div></div>
+          <div class="form-group full"><label>Descrição</label><textarea name="descricao" rows="2" placeholder="O que aconteceu, disciplina, quem solicitou..."></textarea></div>
+          <div class="form-group full"><label>Links <span style="color:var(--text-muted);font-weight:400">(um por linha — “Teams | https://...” ou só a URL)</span></label>
+            <textarea name="links" rows="2" placeholder="Teams | https://teams.microsoft.com/..."></textarea></div>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-top:10px">Registrar ocorrência</button>
+      </form>
+    </details>
+    <datalist id="statusOpcoes"><option value="Ajustado"><option value="Pendente"><option value="Em ajuste"><option value="Justificado"></datalist>
+    {% endif %}
+    <div class="chips" id="mesFiltro"></div>
+    <div class="ind-tab-wrap"><table class="ind-t">
+      <thead><tr><th>Data</th><th>Colaborador</th><th>Critério</th><th class="c">Gravidade</th><th class="c">Status</th><th>Descrição</th>
+        {% if t.status == 'aberto' %}<th></th>{% endif %}</tr></thead>
+      <tbody id="ocorrenciasBody"></tbody>
+    </table></div>
+  </section>
+
+  <section class="ind-sec" id="sec-colaboradores">
+    <div class="ind-h2">Feedback por Colaborador</div>
+    <div class="ind-sub">Gravidade das ocorrências e quanto já afetou cada indicador até o momento</div>
+    <div class="colab-grid" id="colabGrid"></div>
+  </section>
+
+  <section class="ind-sec" id="sec-calculadora">
+    <div class="ind-h2">Calculadora de Indicadores</div>
+    <div class="ind-sub">Já preenchida com as ocorrências registradas. Mexer aqui é só simulação — atualiza as outras abas, mas não grava nada.</div>
+    <div class="calc-tabs" id="calcTabs"></div>
+    <div class="name-row">
+      <div><label>Colaborador</label><div style="font-size:15px;font-weight:800;padding:6px 0" id="calcNome"></div></div>
+      <div><label>Valor total do indicador (R$)</label><input type="number" min="0" step="0.01" id="valorInput"></div>
+    </div>
+    <div class="slices" id="slices"></div>
+    <div class="viewtabs">
+      <button class="viewtab ativo" id="viewLancamento">Lançamento</button>
+      <button class="viewtab" id="viewMemoria">Memória de cálculo</button>
+    </div>
+    <div id="calcCards"></div>
+    <div id="memoria" class="memoria" style="display:none"></div>
+    <div class="total-box">
+      <div class="total-top">
+        <div><span class="total-label" id="totalLabel">Total do trimestre</span><div class="total-value" id="totalValue">R$ 0,00</div></div>
+        <span class="total-sub" id="totalSub"></span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" id="totalBar" style="width:0%"></div></div>
+      <p class="total-note" id="totalNote"></p>
+    </div>
+    <div class="reset-row">
+      <button class="btn btn-secondary" id="restoreBtn">Voltar às ocorrências registradas</button>
+      <button class="btn btn-secondary" id="resetBtn">Zerar campos deste colaborador</button>
+      <button class="btn btn-primary" id="reportBtn">Emitir relatório</button>
+    </div>
+  </section>
+
+  <section class="ind-sec" id="sec-criterios">
+    <div class="ind-h2">Critérios de Avaliação</div>
+    <div class="ind-sub">Regra oficial da calculadora, aplicada separadamente dentro de cada critério</div>
+    <div class="ind-box regras">
+      <h3>Pesos dos critérios</h3>
+      <table class="rt"><thead><tr><th>Critério</th><th>O que avalia</th><th class="num">Peso</th></tr></thead><tbody id="pesosBody"></tbody></table>
+      <h3>Supervisão: desconto pelo % da equipe</h3>
+      <p id="textoSupervisao"></p>
+      <h3>1. Leve e Médio: mínimo pra começar a contar</h3>
+      <table class="rt"><thead><tr><th>Gravidade</th><th class="num">Mínimo pra 1ª posição</th></tr></thead><tbody>
+        <tr><td><span class="dot l"></span>Leve</td><td class="num">5</td></tr><tr><td><span class="dot m"></span>Médio</td><td class="num">3</td></tr></tbody></table>
+      <p>Esse mínimo vale só pra entrar na 1ª posição da tabela de faixas. A partir daí, <b>cada ocorrência extra da mesma gravidade conta direto, 1 a 1</b> (ex.: 5 leves = 1 posição, 6 leves = 2 posições, 8 leves = 4 posições).</p>
+      <h3>2. Alto tem escala própria (não soma com leve/médio)</h3>
+      <table class="rt"><thead><tr><th>Ocorrências de Alto</th><th class="num">Faixa</th></tr></thead><tbody>
+        <tr><td>0</td><td class="num">Sem desconto</td></tr><tr><td>1 a 2</td><td class="num">1 a 3 (20%)</td></tr>
+        <tr><td>3 a 4</td><td class="num">4 a 6 (40%)</td></tr><tr><td>5 em diante</td><td class="num">Zera o indicador (100%)</td></tr></tbody></table>
+      <h3>3. Regra do empurrão (dentro do mesmo critério)</h3>
+      <ul><li>Leve com 3 ocorrências entra na 1ª posição se tiver 2+ médios ou 1 alto no mesmo critério.</li>
+        <li>Médio com 2 ocorrências entra na 1ª posição se tiver 1 alto no mesmo critério.</li><li>Alto nunca precisa de empurrão.</li></ul>
+      <h3>4. Bônus por gravidade combinada</h3>
+      <p>Se dois tipos diferentes fecham pelo menos 1 posição cada, de forma natural, no mesmo critério: <b>+1 posição</b>. Se as <b>três gravidades</b> aparecem juntas no mesmo critério, leve+médio passa para a <b>faixa seguinte</b>; depois compara com a faixa do alto e prevalece a mais severa.</p>
+      <h3>5. Tabela de faixas (leve + médio)</h3>
+      <table class="rt"><thead><tr><th>Total de posições</th><th class="num">Desconto na fatia do critério</th></tr></thead><tbody>
+        <tr><td>0</td><td class="num">0%</td></tr><tr><td>1 a 3</td><td class="num">20%</td></tr><tr><td>4 a 6</td><td class="num">40%</td></tr>
+        <tr><td>7 a 9</td><td class="num">50%</td></tr><tr><td>10 a 12</td><td class="num">75%</td></tr><tr><td>13 em diante</td><td class="num">100%</td></tr></tbody></table>
+      <h3>6. Exemplos práticos</h3>
+      <div class="ex"><b>4 leves sozinhos</b> → abaixo do mínimo (5) → não conta.</div>
+      <div class="ex"><b>5 leves</b> → 1 posição → faixa "1 a 3" (20%).</div>
+      <div class="ex"><b>2 médios + 1 leve</b> → leve não empurra médio → não conta.</div>
+      <div class="ex"><b>2 médios + 1 alto</b> → alto empurra o médio → faixa "1 a 3" (20%).</div>
+      <div class="ex"><b>1 ou 2 altos</b> → faixa "1 a 3" (20%) · <b>3 ou 4 altos</b> → "4 a 6" (40%) · <b>5+ altos</b> → zera (100%).</div>
+      <div class="ex"><b>3 leves + 1 médio + 1 alto</b> → as três juntas → faixa "4 a 6" (40%).</div>
+    </div>
+  </section>
+
+  <dialog class="ind-modal" id="modalEditar">
+    <form method="POST" id="formEditar">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <strong style="font-size:16px">Editar ocorrência</strong>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('modalEditar').close()">Fechar</button>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Colaborador</label><select name="participante_id" id="edColab" required>
+          {% for c in dados.colaboradores if not c.equipe %}<option value="{{ c.id }}">{{ c.nome }}</option>{% endfor %}</select></div>
+        <div class="form-group"><label>Critério</label><select name="criterio" id="edCrit" required>
+          {% for c in dados.criterios %}<option value="{{ loop.index0 }}">{{ c.nome }}</option>{% endfor %}</select></div>
+        <div class="form-group"><label>Data</label><input type="date" name="data" id="edData" required></div>
+        <div class="form-group"><label>Status</label><input type="text" name="status" id="edStatus" list="statusOpcoes"></div>
+        <div class="form-group full"><label>Gravidade</label>
+          <div class="grav-op">{% for k, v in gravidades %}<label class="{{ k }}"><input type="radio" name="gravidade" value="{{ k }}" id="edGrav_{{ k }}" required> {{ v }}</label>{% endfor %}</div></div>
+        <div class="form-group full"><label>Descrição</label><textarea name="descricao" id="edDesc" rows="3"></textarea></div>
+        <div class="form-group full"><label>Links (um por linha — “Título | URL”)</label><textarea name="links" id="edLinks" rows="2"></textarea></div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:10px">Salvar alterações</button>
+    </form>
+  </dialog>
+
+  <div class="rel-overlay" id="reportOverlay"><div class="rel-sheet" id="reportSheet"></div></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>
+  var DADOS = {{ dados|tojson }};
+  var EDITAVEL = {{ 'true' if t.status == 'aberto' else 'false' }};
+  var CSRF = "{{ csrf_token() }}";
+  var URL_EDITAR = "{{ url_for('indicador_ocorrencia_editar', id=0) }}".replace(/0\/editar$/, '');
+  var URL_EXCLUIR = "{{ url_for('indicador_ocorrencia_excluir', id=0) }}".replace(/0\/excluir$/, '');
+  </script>
+  <script>
+/* ===================== CONFIGURAÇÕES (iguais à calculadora do HTML) ===================== */
+var indicadores = DADOS.criterios;
+var CICLO = { leve: 5, medio: 3, alto: 1 };
+var LEVE_PUSH_EM = 3;
+var faixaPadrao = [
+  {max: 0, pct: 0, label: "sem ocorrências"}, {max: 3, pct: 0.20, label: "1 a 3"}, {max: 6, pct: 0.40, label: "4 a 6"},
+  {max: 9, pct: 0.50, label: "7 a 9"}, {max: 12, pct: 0.75, label: "10 a 12"}, {max: Infinity, pct: 1.00, label: "13 em diante"}
+];
+var FAIXA_ALTO_ZERA = { pct: 1.00, label: "5 em diante (zera o indicador)" };
+var colaboradores = DADOS.colaboradores;
+var ocorrencias = DADOS.ocorrencias;
+var MESES = DADOS.meses;
+var GRAV = { leve: { label: "Leve", cls: "ok" }, medio: { label: "Médio", cls: "warn" }, alto: { label: "Alto", cls: "bad" } };
+var SOMA_PESOS = indicadores.reduce(function (a, c) { return a + c.peso; }, 0);
+var NOMES_EQUIPE = colaboradores.filter(function (c) { return !c.equipe; }).map(function (c) { return c.nome; });
+var NOMES_EQUIPE_TXT = NOMES_EQUIPE.length > 1 ? NOMES_EQUIPE.slice(0, -1).join(", ") + " e " + NOMES_EQUIPE[NOMES_EQUIPE.length - 1] : NOMES_EQUIPE.join("");
+var AVS = ["av1", "av2", "av3", "av4", "av6", "av5"];
+
+/* ===================== LÓGICA (igual à calculadora) ===================== */
+function fmtPct(v) { return Math.round(v * 100) + "%"; }
+function fmtPct1(v) { return (Math.round(v * 1000) / 10).toLocaleString("pt-BR") + "%"; }
+function fmtBRL(v) { return "R$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtData(iso) { var p = iso.split("-"); return p[2] + "/" + p[1] + "/" + p[0]; }
+function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function faixaFor(t) {
+  if (t <= 0) return faixaPadrao[0];
+  for (var i = 1; i < faixaPadrao.length; i++) if (t <= faixaPadrao[i].max) return faixaPadrao[i];
+  return faixaPadrao[faixaPadrao.length - 1];
+}
+function faixaAltoFor(alto) {
+  if (alto <= 0) return faixaPadrao[0];
+  if (alto <= 2) return faixaPadrao[1];
+  if (alto <= 4) return faixaPadrao[2];
+  return FAIXA_ALTO_ZERA;
+}
+function calcularCiclos(leve, medio, alto) {
+  var leveEq = 0, levePushed = false;
+  if (leve >= CICLO.leve) leveEq = leve - CICLO.leve + 1;
+  else if (leve === LEVE_PUSH_EM && (medio >= 2 || alto >= 1)) { leveEq = 1; levePushed = true; }
+  var medioEq = 0, medioPushed = false;
+  if (medio >= CICLO.medio) medioEq = medio - CICLO.medio + 1;
+  else if (medio === CICLO.medio - 1 && alto >= 1) { medioEq = 1; medioPushed = true; }
+  var nat = 0;
+  if (leveEq >= 1 && !levePushed) nat++;
+  if (medioEq >= 1 && !medioPushed) nat++;
+  if (alto >= 1) nat++;
+  var doubleBonus = nat >= 2 ? 1 : 0;
+  var totalBase = leveEq + medioEq + doubleBonus;
+  var tres = (leve >= 1 && medio >= 1 && alto >= 1);
+  var totalLM = totalBase;
+  if (tres) totalLM = Math.max(totalBase, faixaFor(totalBase).max + 1);
+  var fLM = faixaFor(totalLM), fA = faixaAltoFor(alto);
+  var faixa = fA.pct >= fLM.pct ? fA : fLM;
+  return { total: totalLM, faixa: faixa, leveCycles: leveEq, medioCycles: medioEq, altoCount: alto, faixaAlto: fA,
+           doubleBonus: doubleBonus, tresGravidades: tres, levePushed: levePushed, medioPushed: medioPushed };
+}
+function badgeClass(p) { if (p === 0) return "zero"; if (p <= 0.40) return "teal"; if (p <= 0.75) return "amber"; return "red"; }
+function contar(colabId, ateData) {
+  var arr = indicadores.map(function () { return { leve: 0, medio: 0, alto: 0 }; });
+  ocorrencias.forEach(function (o) {
+    if (o.colab !== colabId || !arr[o.ind] || !GRAV[o.grav]) return;
+    if (ateData && o.data > ateData) return;
+    arr[o.ind][o.grav]++;
+  });
+  return arr;
+}
+function fatorEquipe(ateData) {
+  var rec = 0, fat = 0;
+  colaboradores.forEach(function (c) {
+    if (c.equipe) return;
+    var r = calcularColaborador(c, ateData ? contar(c.id, ateData) : null, ateData);
+    rec += r.recebidoTotal; fat += r.fatiaTotal;
+  });
+  return fat > 0 ? rec / fat : 1;
+}
+function calcularColaborador(colab, contagens, ateData) {
+  var cont = contagens || colab.indicadores;
+  var linhas = [], recebido = 0, fatiaTotal = 0;
+  indicadores.forEach(function (ind, i) {
+    var s = cont[i], r = calcularCiclos(s.leve, s.medio, s.alto);
+    var fatia = colab.valorTotal * ind.peso, perdido = fatia * r.faixa.pct;
+    recebido += fatia - perdido; fatiaTotal += fatia;
+    linhas.push({ ind: ind, s: s, r: r, faixa: r.faixa, fatia: fatia, perdido: perdido, recebido: fatia - perdido });
+  });
+  var res = { linhas: linhas, recebidoIndicadores: recebido, recebidoTotal: recebido, fatiaTotal: fatiaTotal, fator: 1, descontoEquipe: 0 };
+  if (colab.equipe) {
+    res.linhas = [];
+    res.recebidoIndicadores = fatiaTotal;
+    res.fator = fatorEquipe(ateData);
+    res.recebidoTotal = fatiaTotal * res.fator;
+    res.descontoEquipe = fatiaTotal - res.recebidoTotal;
+  }
+  res.pctDescontoGeral = fatiaTotal > 0 ? 1 - res.recebidoTotal / fatiaTotal : 0;
+  return res;
+}
+function proximoGatilho(s, fatia) {
+  var atual = calcularCiclos(s.leve, s.medio, s.alto).faixa.pct, out = [];
+  ["leve", "medio", "alto"].forEach(function (g) {
+    var t = { leve: s.leve, medio: s.medio, alto: s.alto }; t[g]++;
+    var p = calcularCiclos(t.leve, t.medio, t.alto).faixa.pct;
+    if (p > atual) out.push({ grav: g, pct: p, valor: fatia * p });
+  });
+  return out;
+}
+function totais(s) { return s.reduce(function (a, x) { a.leve += x.leve; a.medio += x.medio; a.alto += x.alto; return a; }, { leve: 0, medio: 0, alto: 0 }); }
+function lmaHTML(t) { return '<span class="lma"><b class="l">' + t.leve + '</b> / <b class="m">' + t.medio + '</b> / <b class="a">' + t.alto + '</b></span>'; }
+function emAlerta(colab) {
+  return colab.indicadores.some(function (s) {
+    var p = calcularCiclos(s.leve, s.medio, s.alto).faixa.pct;
+    return p === 0 && (s.leve >= 3 || s.medio >= 2);
+  });
+}
+function statusPill(colab, calc) {
+  var d = calc.pctDescontoGeral;
+  if (d < 0.00001) return emAlerta(colab) ? '<span class="pill warn">Sem desconto · em alerta</span>' : '<span class="pill ok">Sem desconto</span>';
+  if (d <= 0.10) return '<span class="pill warn">Atenção</span>';
+  return '<span class="pill bad">Crítico</span>';
+}
+function pctClass(d) { return d < 0.00001 ? "" : (d <= 0.10 ? "warn" : "bad"); }
+
+/* ===================== ESTADO ===================== */
+function restaurar(colab) { colab.indicadores = contar(colab.id, null); }
+colaboradores.forEach(restaurar);
+var activeIdx = 0, currentView = "lancamento", mesFiltro = "todos";
+function emSimulacao() {
+  return colaboradores.some(function (c) { return JSON.stringify(c.indicadores) !== JSON.stringify(contar(c.id, null)) || c.valorTotal !== c._valorOriginal; });
+}
+colaboradores.forEach(function (c) { c._valorOriginal = c.valorTotal; });
+function restaurarTodos() { colaboradores.forEach(function (c) { restaurar(c); c.valorTotal = c._valorOriginal; }); renderCalc(); renderOthers(); }
+
+/* ===================== VISÃO GERAL ===================== */
+function renderVisao() {
+  document.getElementById("visaoSub").textContent = DADOS.rotulo + " · " + MESES.map(function (m) { return m.label; }).join(", ").replace(/, ([^,]*)$/, " e $1");
+  var totRec = 0, totFat = 0, semDesc = [], nOc = 0, rows = "";
+  colaboradores.forEach(function (c) {
+    var calc = calcularColaborador(c), t = totais(c.indicadores);
+    totRec += calc.recebidoTotal; totFat += calc.fatiaTotal;
+    nOc += t.leve + t.medio + t.alto;
+    if (calc.pctDescontoGeral < 0.00001) semDesc.push(c.nome);
+    rows += '<tr><td><strong>' + esc(c.nome) + '</strong></td><td style="color:var(--text-muted);font-size:12.5px">' + esc(c.funcao) + '</td>' +
+      '<td class="c">' + lmaHTML(t) + '</td><td class="r">' + fmtBRL(calc.fatiaTotal) + '</td>' +
+      '<td class="r" style="font-weight:800;color:var(--' + (calc.pctDescontoGeral < 0.00001 ? "ok" : calc.pctDescontoGeral <= 0.10 ? "warn" : "bad") + ')">' +
+      fmtPct1(calc.pctDescontoGeral) + '<div style="font-size:11.5px;font-weight:500;color:var(--text-muted)">− ' + fmtBRL(calc.fatiaTotal - calc.recebidoTotal) + '</div></td>' +
+      '<td class="r" style="font-weight:700">' + fmtBRL(calc.recebidoTotal) + '</td><td class="c">' + statusPill(c, calc) + '</td></tr>';
+  });
+  document.getElementById("resumoBody").innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">Nenhum colaborador neste trimestre — use “Configurar equipe e pesos”.</td></tr>';
+  document.getElementById("resumoFoot").innerHTML = totFat ? '<tr><td colspan="3">Total da equipe</td><td class="r">' + fmtBRL(totFat) + '</td><td class="r">' +
+    fmtPct1(1 - totRec / totFat) + '</td><td class="r">' + fmtBRL(totRec) + '</td><td></td></tr>' : '';
+  var pct = totFat ? totRec / totFat : 1;
+  document.getElementById("equipeGeral").innerHTML =
+    '<div class="big">' + fmtPct1(pct) + '</div><div><h3>Desempenho Geral da Equipe</h3>' +
+    '<p>Valor recebido pela equipe sobre o valor possível dos ' + indicadores.length + ' critérios (' + fmtBRL(totRec) + ' de ' + fmtBRL(totFat) + '). Considera as ocorrências registradas até o momento.</p>' +
+    '<div class="ind-barra"><div style="width:' + (pct * 100).toFixed(1) + '%"></div></div></div>';
+  document.getElementById("statCards").innerHTML =
+    '<div class="ind-card green"><div class="l">Colaboradores</div><div class="v">' + colaboradores.length + '</div><div class="s">Supervisão e Inserção</div></div>' +
+    '<div class="ind-card blue"><div class="l">Ocorrências</div><div class="v">' + nOc + '</div><div class="s">Registradas no trimestre</div></div>' +
+    '<div class="ind-card orange"><div class="l">Total Equipe</div><div class="v">' + fmtBRL(totRec).replace(",00", "") + '</div><div class="s">Descontado: ' + fmtBRL(totFat - totRec) + '</div></div>' +
+    '<div class="ind-card green"><div class="l">Sem desconto</div><div class="v">' + semDesc.length + ' / ' + colaboradores.length + '</div><div class="s">' + esc(semDesc.join(", ") || "—") + '</div></div>';
+  var resto = Math.round((1 - SOMA_PESOS) * 100);
+  document.getElementById("notaPesos").innerHTML = '<strong>Atenção aos pesos:</strong> os ' + indicadores.length + ' critérios somam <b>' + Math.round(SOMA_PESOS * 100) + '%</b> (' +
+    indicadores.map(function (c) { return esc(c.nome) + ' ' + Math.round(c.peso * 100) + '%'; }).join(' + ') + ').' +
+    (resto > 0 ? ' Por isso o "valor possível" de cada colaborador é ' + Math.round(SOMA_PESOS * 100) + '% do valor total do indicador (ex.: R$ 1.500 → ' + fmtBRL(1500 * SOMA_PESOS) + '), e os ' + resto + '% restantes não entram em nenhum critério.' : '');
+  document.getElementById("simAviso").classList.toggle("on", emSimulacao());
+}
+
+/* ===================== OCORRÊNCIAS ===================== */
+function nomeDe(id) { for (var i = 0; i < colaboradores.length; i++) if (colaboradores[i].id === id) return colaboradores[i].nome; return "?"; }
+function linksHTML(o) { return o.links.map(function (l) { return '<a class="lk" href="' + esc(l.u) + '" target="_blank" rel="noopener">🔗 ' + esc(l.t) + '</a>'; }).join(""); }
+function renderOcorrencias() {
+  var filtros = [{ k: "todos", label: "Todos" }].concat(MESES.map(function (m) { return { k: m.k, label: m.label }; }));
+  document.getElementById("mesFiltro").innerHTML = filtros.map(function (f) {
+    var n = ocorrencias.filter(function (o) { return f.k === "todos" || o.data.substr(5, 2) === f.k; }).length;
+    return '<button class="chip-b' + (mesFiltro === f.k ? " ativo" : "") + '" data-mes="' + f.k + '">' + f.label + ' (' + n + ')</button>';
+  }).join("");
+  document.querySelectorAll("#mesFiltro .chip-b").forEach(function (b) {
+    b.onclick = function () { mesFiltro = b.getAttribute("data-mes"); renderOcorrencias(); };
+  });
+  var lista = ocorrencias.filter(function (o) { return mesFiltro === "todos" || o.data.substr(5, 2) === mesFiltro; })
+    .sort(function (a, b) { return a.data < b.data ? -1 : a.data > b.data ? 1 : a.id - b.id; });
+  var cols = EDITAVEL ? 7 : 6;
+  document.getElementById("ocorrenciasBody").innerHTML = lista.length ? lista.map(function (o) {
+    return '<tr><td style="white-space:nowrap">' + fmtData(o.data) + '</td><td><strong>' + esc(nomeDe(o.colab)) + '</strong></td>' +
+      '<td>' + esc(indicadores[o.ind] ? indicadores[o.ind].curto : "?") + '</td><td class="c"><span class="pill ' + GRAV[o.grav].cls + '">' + GRAV[o.grav].label + '</span></td>' +
+      '<td class="c">' + (o.status ? '<span class="pill ok">' + esc(o.status) + '</span>' : '<span class="pill neutral">Sem status</span>') + '</td>' +
+      '<td class="desc">' + esc(o.desc) + (o.links.length ? '<div>' + linksHTML(o) + '</div>' : '') + '</td>' +
+      (EDITAVEL ? '<td style="white-space:nowrap"><button type="button" class="btn btn-secondary btn-sm" onclick="abrirEdicao(' + o.id + ')">Editar</button> ' +
+        '<form method="POST" action="' + URL_EXCLUIR + o.id + '/excluir" style="display:inline;margin:0"><input type="hidden" name="csrf_token" value="' + esc(CSRF) + '">' +
+        '<button type="submit" class="btn btn-danger btn-sm" data-confirm="Excluir esta ocorrência? O cálculo é refeito na hora.">Excluir</button></form></td>' : '') + '</tr>';
+  }).join("") : '<tr><td colspan="' + cols + '" style="text-align:center;color:var(--text-muted);padding:28px">Nenhuma ocorrência registrada' + (mesFiltro === "todos" ? "" : " neste mês") + '.</td></tr>';
+}
+function abrirEdicao(id) {
+  var o = ocorrencias.find(function (x) { return x.id === id; }); if (!o) return;
+  document.getElementById("formEditar").action = URL_EDITAR + id + "/editar";
+  document.getElementById("edColab").value = o.colab;
+  document.getElementById("edCrit").value = o.ind;
+  document.getElementById("edData").value = o.data;
+  document.getElementById("edStatus").value = o.status;
+  document.getElementById("edDesc").value = o.desc;
+  document.getElementById("edLinks").value = o.links.map(function (l) { return l.t + " | " + l.u; }).join("\n");
+  var g = document.getElementById("edGrav_" + o.grav); if (g) g.checked = true;
+  document.getElementById("modalEditar").showModal();
+}
+
+/* ===================== COLABORADORES ===================== */
+function renderColabs() {
+  var html = "";
+  colaboradores.forEach(function (c, ci) {
+    var calc = calcularColaborador(c);
+    var meses = MESES.map(function (m) {
+      var cm = calcularColaborador(c, contar(c.id, m.fim), m.fim);
+      return '<div class="mes"><b>' + m.curto + '</b><span>desc. ' + fmtPct1(cm.pctDescontoGeral) + '</span></div>';
+    }).join("");
+    var linhas = calc.linhas.map(function (l) {
+      var cls = l.faixa.pct === 0 ? "ok" : l.faixa.pct <= 0.40 ? "warn" : "bad";
+      return '<tr><td>' + esc(l.ind.curto) + '<div style="font-size:11px;color:var(--text-muted)">Fatia ' + fmtBRL(l.fatia) + ' · ' + Math.round(l.ind.peso * 100) + '%</div></td>' +
+        '<td>' + lmaHTML(l.s) + '</td><td>' + fmtPct(l.faixa.pct) + '</td><td><span class="pill ' + cls + '">' + fmtBRL(l.recebido) + '</span></td></tr>';
+    }).join("");
+    var minhas = ocorrencias.filter(function (o) { return o.colab === c.id; });
+    var ocHTML = minhas.length ? '<ul>' + minhas.map(function (o) {
+      return '<li><span class="pill ' + GRAV[o.grav].cls + '">' + GRAV[o.grav].label + '</span> <b>' + fmtData(o.data) + '</b> · ' + esc(indicadores[o.ind] ? indicadores[o.ind].curto : "?") + ' — ' + esc(o.desc) + '</li>';
+    }).join("") + '</ul>' : '<div class="iv ok">Nenhuma ocorrência no trimestre</div>';
+    var afetou = calc.linhas.filter(function (l) { return l.faixa.pct > 0; });
+    var partes = afetou.map(function (l) { return esc(l.ind.curto) + ': ' + fmtPct(l.faixa.pct) + ' da fatia (− ' + fmtBRL(l.perdido) + ')'; });
+    if (c.equipe && calc.descontoEquipe > 0.004) partes.push('Desconto equipe: ' + fmtPct1(1 - calc.fator) + ' (− ' + fmtBRL(calc.descontoEquipe) + ') · % equipe ' + fmtPct1(calc.fator));
+    var afetouHTML = partes.length ? partes.join("<br>") + '<br><span style="color:var(--text)">No total: − ' + fmtBRL(calc.fatiaTotal - calc.recebidoTotal) + ' (' + fmtPct1(calc.pctDescontoGeral) + ' do valor possível)</span>' : 'Nenhum indicador afetado até o momento';
+    var gat = [];
+    calc.linhas.forEach(function (l) {
+      var s = l.s; if (s.leve + s.medio + s.alto === 0) return;
+      var pg = proximoGatilho(s, l.fatia); if (!pg.length) return;
+      gat.push('<li><b>' + esc(l.ind.curto) + '</b> (hoje ' + fmtPct(l.faixa.pct) + '): ' + pg.map(function (p) {
+        return '+1 ' + GRAV[p.grav].label.toLowerCase() + ' → ' + fmtPct(p.pct) + ' (− ' + fmtBRL(p.valor) + ')';
+      }).join(" · ") + '</li>');
+    });
+    var resto = Math.round((1 - SOMA_PESOS) * 100);
+    html += '<div class="colab-card"><div class="colab-head"><div class="av ' + AVS[ci % AVS.length] + '">' + esc(c.nome.charAt(0)) + '</div>' +
+      '<div><div class="colab-nome">' + esc(c.nome) + '</div><div class="colab-funcao">' + esc(c.funcao) + '</div></div>' +
+      '<div class="colab-pct"><div class="v ' + pctClass(calc.pctDescontoGeral) + '">' + fmtPct1(1 - calc.pctDescontoGeral) + '</div><div class="s">do valor possível</div></div></div>' +
+      '<div class="colab-body"><div class="meses">' + meses + '</div>' +
+      (c.equipe ? '' : '<table class="mini"><thead><tr><th>Critério</th><th>L / M / A</th><th>Desc.</th><th>Recebido</th></tr></thead><tbody>' + linhas + '</tbody></table>') +
+      '<div class="infos">' +
+        '<div class="info"><div class="il">Total final</div><div class="iv ' + (pctClass(calc.pctDescontoGeral) || "ok") + '">' + fmtBRL(calc.recebidoTotal) + ' / ' + fmtBRL(calc.fatiaTotal) + ' — ' + fmtPct1(1 - calc.pctDescontoGeral) + '</div></div>' +
+        (c.equipe ? '<div class="info"><div class="il">Desconto pelo % da equipe</div><div class="iv ' + (calc.fator < 1 ? "warn" : "ok") + '">' + fmtBRL(c.valorTotal) + (resto ? ' − ' + resto + '%' : '') + ' = ' + fmtBRL(calc.fatiaTotal) + '<br>' + fmtBRL(calc.fatiaTotal) + ' × % equipe ' + fmtPct1(calc.fator) + ' = ' + fmtBRL(calc.recebidoTotal) + '<div style="font-size:11.5px;font-weight:500;color:var(--text-muted);margin-top:3px">A supervisão não tem desconto por critérios próprios: os mesmos ' + resto + '% a menos de todos e depois o % da equipe (soma recebida por ' + esc(NOMES_EQUIPE_TXT) + ' ÷ soma do valor possível deles).</div></div></div>' : '') +
+        '<div class="info"><div class="il">Quanto afetou até o momento</div><div class="iv ' + (partes.length ? "warn" : "ok") + '">' + afetouHTML + '</div></div>' +
+        '<div class="info"><div class="il">Ocorrências e gravidade</div>' + ocHTML + '</div>' +
+        (gat.length ? '<div class="info"><div class="il">Próximo gatilho (se entrar mais 1)</div><ul>' + gat.join("") + '</ul></div>' : '') +
+      '</div></div>' +
+      '<div class="colab-foot"><button class="btn btn-secondary btn-sm" data-calc="' + ci + '">Abrir na calculadora</button><button class="btn btn-primary btn-sm" data-rel="' + ci + '">Emitir relatório</button></div></div>';
+  });
+  var grid = document.getElementById("colabGrid");
+  grid.innerHTML = html;
+  grid.querySelectorAll("[data-calc]").forEach(function (b) { b.onclick = function () { activeIdx = +b.getAttribute("data-calc"); renderCalc(); mostrarAba("calculadora"); }; });
+  grid.querySelectorAll("[data-rel]").forEach(function (b) { b.onclick = function () { activeIdx = +b.getAttribute("data-rel"); renderCalc(); openReport(); }; });
+}
+
+/* ===================== CALCULADORA ===================== */
+function renderCalc() {
+  if (!colaboradores.length) return;
+  var colab = colaboradores[activeIdx];
+  document.getElementById("calcTabs").innerHTML = colaboradores.map(function (c, i) {
+    return '<button class="chip-b' + (i === activeIdx ? " ativo" : "") + '" data-i="' + i + '">' + esc(c.nome) + '</button>';
+  }).join("");
+  document.querySelectorAll("#calcTabs .chip-b").forEach(function (b) { b.onclick = function () { activeIdx = +b.getAttribute("data-i"); renderCalc(); }; });
+  document.getElementById("calcNome").textContent = colab.nome;
+  var vi = document.getElementById("valorInput");
+  if (document.activeElement !== vi) vi.value = colab.valorTotal;
+  vi.oninput = function () { var v = parseFloat(vi.value); colab.valorTotal = isNaN(v) || v < 0 ? 0 : v; renderCalcBody(); renderOthers(); };
+  renderCalcBody();
+  switchView(currentView);
+}
+function setTotal(colab, calc, nota) {
+  document.getElementById("totalLabel").textContent = "Total do trimestre — " + colab.nome;
+  document.getElementById("totalValue").textContent = fmtBRL(calc.recebidoTotal) + " de " + fmtBRL(calc.fatiaTotal);
+  document.getElementById("totalSub").textContent = fmtPct1(calc.pctDescontoGeral) + " de desconto no total";
+  document.getElementById("totalBar").style.width = Math.min(calc.pctDescontoGeral * 100, 100) + "%";
+  document.getElementById("totalNote").textContent = nota;
+}
+function renderCalcBody() {
+  var colab = colaboradores[activeIdx], calc = calcularColaborador(colab);
+  var resto = Math.round((1 - SOMA_PESOS) * 100);
+  if (colab.equipe) {
+    document.getElementById("slices").innerHTML = "";
+    var outros = colaboradores.filter(function (c) { return !c.equipe; }).map(function (c) {
+      var r = calcularColaborador(c);
+      return '<tr><td>' + esc(c.nome) + '</td><td class="r">' + fmtBRL(r.fatiaTotal) + '</td><td class="r">' + fmtBRL(r.recebidoTotal) + '</td><td class="r">' + fmtPct1(r.fatiaTotal ? r.recebidoTotal / r.fatiaTotal : 1) + '</td></tr>';
+    }).join("");
+    document.getElementById("calcCards").innerHTML = '<div class="ccard"><div class="ccard-top"><div><p class="ccard-title">% da equipe</p><p class="ccard-weight">A supervisão perde os mesmos ' + resto + '% de todos e depois é descontada pelo % da equipe.</p></div><span class="badge2 ' + (calc.fator < 1 ? "amber" : "teal") + '">' + fmtPct1(calc.fator) + '</span></div>' +
+      '<div class="ind-tab-wrap"><table class="ind-t"><thead><tr><th>Colaborador</th><th class="r">Valor possível</th><th class="r">Recebido</th><th class="r">%</th></tr></thead><tbody>' + outros + '</tbody></table></div>' +
+      '<div class="footline"><span>Valor total: <b>' + fmtBRL(colab.valorTotal) + '</b></span><span>Base (−' + resto + '%): <b>' + fmtBRL(calc.fatiaTotal) + '</b></span><span>Descontado: <b>' + fmtBRL(calc.descontoEquipe) + '</b></span><span>Recebido: <b>' + fmtBRL(calc.recebidoTotal) + '</b></span></div></div>';
+    setTotal(colab, calc, fmtBRL(colab.valorTotal) + " − " + resto + "% = " + fmtBRL(calc.fatiaTotal) + " × % da equipe " + fmtPct1(calc.fator) + " = " + fmtBRL(calc.recebidoTotal) + ".");
+    document.getElementById("memoria").innerHTML = '<p class="linha"><b>Colaborador:</b> ' + esc(colab.nome) + ' · <b>Valor total:</b> ' + fmtBRL(colab.valorTotal) + '</p>' +
+      '<p class="linha">Base: ' + fmtBRL(colab.valorTotal) + ' − ' + resto + '% (critérios somam ' + Math.round(SOMA_PESOS * 100) + '%) = <b>' + fmtBRL(calc.fatiaTotal) + '</b>.</p>' +
+      '<p class="linha">% da equipe = soma recebida pelos colaboradores ÷ soma do valor possível deles = <b>' + fmtPct1(calc.fator) + '</b>.</p>' +
+      '<p class="linha" style="font-weight:700">' + fmtBRL(calc.fatiaTotal) + ' × ' + fmtPct1(calc.fator) + ' = ' + fmtBRL(calc.recebidoTotal) + ' (desconto de ' + fmtBRL(calc.descontoEquipe) + ').</p>';
+    return;
+  }
+  document.getElementById("slices").innerHTML = indicadores.map(function (ind) {
+    return '<div class="slice"><p>' + esc(ind.nome) + ' (' + Math.round(ind.peso * 100) + '%)</p><b>' + fmtBRL(colab.valorTotal * ind.peso) + '</b></div>';
+  }).join("");
+  var focused = document.activeElement, fIdx = null, fGrav = null;
+  if (focused && focused.getAttribute && focused.getAttribute("data-grav")) { fIdx = focused.getAttribute("data-idx"); fGrav = focused.getAttribute("data-grav"); }
+  var cont = document.getElementById("calcCards");
+  cont.innerHTML = calc.linhas.map(function (l, i) {
+    var r = l.r, s = l.s;
+    var bd = "Leve: " + r.leveCycles + (r.levePushed ? " (empurrado)" : "") + " posição(ões) · Médio: " + r.medioCycles + (r.medioPushed ? " (empurrado)" : "") +
+      " posição(ões) · Alto: " + r.altoCount + " ocorrência(s) → faixa própria \"" + r.faixaAlto.label + "\"" +
+      (r.doubleBonus ? " · Bônus gravidade combinada: +1" : "") + (r.tresGravidades ? " · Leve+Médio+Alto juntos: sobe pra faixa seguinte" : "") +
+      " · Faixa final do critério: \"" + l.faixa.label + "\"";
+    return '<div class="ccard"><div class="ccard-top"><div><p class="ccard-title">' + esc(l.ind.nome) + '</p><p class="ccard-weight">Fatia: ' + fmtBRL(l.fatia) + ' (' + Math.round(l.ind.peso * 100) + '% do total)</p></div>' +
+      '<span class="badge2 ' + badgeClass(l.faixa.pct) + '">' + l.faixa.label + ' · ' + fmtPct(l.faixa.pct) + '</span></div>' +
+      '<div class="inputs">' +
+      '<div class="field leve"><label>Leves</label><input type="number" min="0" step="1" data-idx="' + i + '" data-grav="leve" value="' + s.leve + '"></div>' +
+      '<div class="field medio"><label>Médios</label><input type="number" min="0" step="1" data-idx="' + i + '" data-grav="medio" value="' + s.medio + '"></div>' +
+      '<div class="field alto"><label>Altos</label><input type="number" min="0" step="1" data-idx="' + i + '" data-grav="alto" value="' + s.alto + '"></div></div>' +
+      '<div class="footline"><span>Descontado: <b>' + fmtBRL(l.perdido) + '</b></span><span>Recebido: <b>' + fmtBRL(l.recebido) + '</b></span></div>' +
+      '<div class="breakdown">' + esc(bd) + '</div></div>';
+  }).join("");
+  cont.querySelectorAll("input").forEach(function (inp) {
+    inp.addEventListener("input", function () {
+      var v = parseInt(inp.value, 10); if (isNaN(v) || v < 0) v = 0;
+      colab.indicadores[+inp.getAttribute("data-idx")][inp.getAttribute("data-grav")] = v;
+      renderCalcBody(); renderOthers();
+    });
+  });
+  if (fIdx !== null) {
+    var again = cont.querySelector('input[data-idx="' + fIdx + '"][data-grav="' + fGrav + '"]');
+    if (again) { again.focus(); try { var n = again.value.length; again.setSelectionRange(n, n); } catch (e) {} }
+  }
+  setTotal(colab, calc, "Soma do valor recebido nos " + indicadores.length + " critérios (fatia menos o desconto de cada um). A barra mostra o % de desconto.");
+  renderMemoria();
+}
+function frase(nome, count, eq, pushed) {
+  if (count === 0) return null;
+  var p = [count + (count === 1 ? " ocorrência " + nome : " ocorrências " + nome + "s")];
+  if (pushed) p.push("empurrada por outra gravidade, contando como 1 posição");
+  else if (eq >= 1) p.push("equivale a " + eq + " posição(ões) na tabela de faixas");
+  else p.push("ainda não atingiu o mínimo pra começar a contar");
+  return p.join(", ");
+}
+function renderMemoria() {
+  var colab = colaboradores[activeIdx], calc = calcularColaborador(colab);
+  var h = '<p class="linha"><b>Colaborador:</b> ' + esc(colab.nome) + ' · <b>Valor total do indicador:</b> ' + fmtBRL(colab.valorTotal) + '</p>';
+  calc.linhas.forEach(function (l) {
+    var s = l.s, r = l.r;
+    h += '<p class="crit-title">' + esc(l.ind.nome) + '</p><p class="linha">Fatia deste critério: <b>' + fmtBRL(l.fatia) + '</b> (' + Math.round(l.ind.peso * 100) + '% do valor total).</p>';
+    if (s.leve + s.medio + s.alto === 0) { h += '<p class="linha">Nenhuma ocorrência lançada. Sem desconto.</p>'; return; }
+    var dl = frase("leve", s.leve, r.leveCycles, r.levePushed), dm = frase("médio", s.medio, r.medioCycles, r.medioPushed);
+    if (dl) h += '<p class="linha"><b>Leves:</b> ' + dl + '.</p>';
+    if (dm) h += '<p class="linha"><b>Médios:</b> ' + dm + '.</p>';
+    if (s.alto > 0) h += '<p class="linha"><b>Altos:</b> ' + s.alto + ' ocorrência(s) → faixa própria do alto: "' + r.faixaAlto.label + '" (' + fmtPct(r.faixaAlto.pct) + ').</p>';
+    if (r.doubleBonus) h += '<p class="linha">Duas gravidades diferentes fecharam posição sozinhas neste critério → <b>bônus de +1</b>.</p>';
+    if (r.tresGravidades) h += '<p class="linha">As três gravidades apareceram juntas neste critério → passa para a <b>faixa seguinte</b>.</p>';
+    h += '<p class="linha">Faixa final do critério: <b>"' + l.faixa.label + '"</b> → <b>' + fmtPct(l.faixa.pct) + '</b> de desconto.</p>';
+    h += '<p class="linha">Desconto: ' + fmtBRL(l.fatia) + ' × ' + fmtPct(l.faixa.pct) + ' = <b>' + fmtBRL(l.perdido) + '</b>. Recebido neste critério: <b>' + fmtBRL(l.recebido) + '</b>.</p>';
+  });
+  h += '<p class="linha" style="font-weight:700">Total recebido no trimestre: ' + fmtBRL(calc.recebidoTotal) + ' de ' + fmtBRL(calc.fatiaTotal) + ' (' + fmtPct1(calc.pctDescontoGeral) + ' de desconto geral).</p>';
+  document.getElementById("memoria").innerHTML = h;
+}
+function switchView(v) {
+  currentView = v;
+  document.getElementById("viewLancamento").classList.toggle("ativo", v === "lancamento");
+  document.getElementById("viewMemoria").classList.toggle("ativo", v === "memoria");
+  document.getElementById("calcCards").style.display = v === "lancamento" ? "block" : "none";
+  document.getElementById("memoria").style.display = v === "memoria" ? "block" : "none";
+}
+document.getElementById("viewLancamento").onclick = function () { switchView("lancamento"); };
+document.getElementById("viewMemoria").onclick = function () { switchView("memoria"); };
+document.getElementById("resetBtn").onclick = function () {
+  colaboradores[activeIdx].indicadores = indicadores.map(function () { return { leve: 0, medio: 0, alto: 0 }; });
+  renderCalcBody(); renderOthers();
+};
+document.getElementById("restoreBtn").onclick = function () { var c = colaboradores[activeIdx]; restaurar(c); c.valorTotal = c._valorOriginal; renderCalc(); renderOthers(); };
+document.getElementById("reportBtn").onclick = openReport;
+
+/* ===================== RELATÓRIO / PDF / EXCEL ===================== */
+function regrasTexto() {
+  var resto = Math.round((1 - SOMA_PESOS) * 100);
+  return "Leve conta a partir de 5 ocorrências, Médio a partir de 3, cada uma contando 1 a 1 depois disso. Alto tem escala própria (1-2 = 1 a 3, 3-4 = 4 a 6, 5+ = zera o indicador), sem somar com leve/médio. Leve com 3 ocorrências é empurrado com 2+ médios ou 1 alto; médio com 2 ocorrências é empurrado com 1 alto. Duas gravidades entrando naturalmente no mesmo critério somam +1 de bônus. O % de cada critério é aplicado sobre a fatia (em R$) daquele critério. Pesos: " +
+    indicadores.map(function (c) { return c.nome + " " + Math.round(c.peso * 100) + "%"; }).join(", ") +
+    ". Supervisão: não tem desconto por critérios próprios; tira os mesmos " + resto + "% de todos (valor total × " + Math.round(SOMA_PESOS * 100) + "%) e o resultado é multiplicado pelo % da equipe (soma recebida pelos colaboradores ÷ soma do valor possível deles).";
+}
+function hojeStr() { var d = new Date(); return String(d.getDate()).padStart(2, "0") + "/" + String(d.getMonth() + 1).padStart(2, "0") + "/" + d.getFullYear(); }
+function nomeArquivo(c, ext) { return "relatorio_" + DADOS.trimestre + "tri_" + DADOS.ano + "_" + c.nome.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "_") + "." + ext; }
+function minhasOc(c) { return ocorrencias.filter(function (o) { return o.colab === c.id; }); }
+function critCurto(i) { return indicadores[i] ? indicadores[i].curto : "?"; }
+function openReport() {
+  var c = colaboradores[activeIdx], calc = calcularColaborador(c);
+  var resto = Math.round((1 - SOMA_PESOS) * 100);
+  var rows = calc.linhas.map(function (l) {
+    return "<tr><td>" + esc(l.ind.nome) + "</td><td class=\"num\">" + l.s.leve + " / " + l.s.medio + " / " + l.s.alto + "</td><td>" + l.faixa.label +
+      "</td><td class=\"num\">" + fmtPct(l.faixa.pct) + "</td><td class=\"num\">" + fmtBRL(l.fatia) + "</td><td class=\"num\">" + fmtBRL(l.recebido) + "</td></tr>";
+  }).join("");
+  var oc = minhasOc(c);
+  var ocRows = oc.length ? oc.map(function (o) {
+    return "<tr><td>" + fmtData(o.data) + "</td><td>" + esc(critCurto(o.ind)) + "</td><td>" + GRAV[o.grav].label + "</td><td>" + esc(o.desc) + "</td></tr>";
+  }).join("") : "<tr><td colspan=\"4\">Nenhuma ocorrência no trimestre.</td></tr>";
+  document.getElementById("reportSheet").innerHTML =
+    "<div class=\"rel-head\"><div><h2>Relatório de indicadores</h2><p>Inserção de Materiais · " + esc(DADOS.rotulo) + " · Emitido em " + hojeStr() + "</p></div>" +
+    "<div class=\"rel-actions\"><button id=\"pdfBtn\">Baixar PDF</button><button id=\"excelBtn\">Baixar Excel</button><button id=\"printBtn\">Imprimir</button><button class=\"primary\" id=\"closeReportBtn\">Fechar</button></div></div>" +
+    "<p style=\"font-size:13px\"><b>Colaborador:</b> " + esc(c.nome) + " · <b>Valor total:</b> " + fmtBRL(c.valorTotal) + " · <b>Valor possível (" + indicadores.length + " critérios):</b> " + fmtBRL(calc.fatiaTotal) + "</p>" +
+    "<table class=\"rel-t\"><thead><tr><th>Critério</th><th class=\"num\">Leve/Médio/Alto</th><th>Faixa</th><th class=\"num\">%</th><th class=\"num\">Fatia</th><th class=\"num\">Recebido</th></tr></thead><tbody>" + rows +
+    (c.equipe ? "<tr><td colspan=\"5\">Base (valor total − " + resto + "%)</td><td class=\"num\">" + fmtBRL(calc.fatiaTotal) + "</td></tr><tr><td colspan=\"5\">Desconto equipe (% equipe " + fmtPct1(calc.fator) + ")</td><td class=\"num\">− " + fmtBRL(calc.descontoEquipe) + "</td></tr>" : "") +
+    "<tr class=\"rel-total\"><td colspan=\"5\">Total recebido no trimestre (" + fmtPct1(calc.pctDescontoGeral) + " de desconto)</td><td class=\"num\">" + fmtBRL(calc.recebidoTotal) + "</td></tr></tbody></table>" +
+    "<h3>Ocorrências registradas</h3><table class=\"rel-t\"><thead><tr><th>Data</th><th>Critério</th><th>Gravidade</th><th>Descrição</th></tr></thead><tbody>" + ocRows + "</tbody></table>" +
+    "<h3>Como o cálculo é feito</h3><p class=\"rp\">" + esc(regrasTexto()) + "</p>";
+  document.getElementById("printBtn").onclick = function () { window.print(); };
+  document.getElementById("closeReportBtn").onclick = function () { document.getElementById("reportOverlay").classList.remove("open"); };
+  document.getElementById("pdfBtn").onclick = baixarPDF;
+  document.getElementById("excelBtn").onclick = baixarExcel;
+  document.getElementById("reportOverlay").classList.add("open");
+}
+document.getElementById("reportOverlay").addEventListener("click", function (e) { if (e.target === this) this.classList.remove("open"); });
+function baixarPDF() {
+  if (!window.jspdf) { showToast("Sem conexão para gerar o PDF. Use Imprimir → Salvar como PDF.", "warning"); return; }
+  var c = colaboradores[activeIdx], calc = calcularColaborador(c), resto = Math.round((1 - SOMA_PESOS) * 100);
+  var doc = new window.jspdf.jsPDF();
+  doc.setFontSize(15); doc.setTextColor(30, 42, 56); doc.text("Relatório de indicadores", 14, 18);
+  doc.setFontSize(10); doc.setTextColor(91, 107, 124); doc.text("Inserção de Materiais · " + DADOS.rotulo + " · Emitido em " + hojeStr(), 14, 24);
+  doc.setFontSize(11); doc.setTextColor(30, 42, 56);
+  doc.text("Colaborador: " + c.nome, 14, 34);
+  doc.text("Valor total: " + fmtBRL(c.valorTotal) + "   ·   Valor possível (" + indicadores.length + " critérios): " + fmtBRL(calc.fatiaTotal), 14, 40.5);
+  doc.autoTable({
+    startY: 46, head: [["Critério", "Leve/Médio/Alto", "Faixa", "%", "Fatia", "Recebido"]],
+    body: calc.linhas.map(function (l) { return [l.ind.nome, l.s.leve + " / " + l.s.medio + " / " + l.s.alto, l.faixa.label, fmtPct(l.faixa.pct), fmtBRL(l.fatia), fmtBRL(l.recebido)]; })
+      .concat(c.equipe ? [["Base (valor total - " + resto + "%)", "", "", "", "", fmtBRL(calc.fatiaTotal)], ["Desconto equipe (% equipe " + fmtPct1(calc.fator) + ")", "", "", "", "", "- " + fmtBRL(calc.descontoEquipe)]] : []),
+    foot: [["Total recebido (" + fmtPct1(calc.pctDescontoGeral) + " de desconto)", "", "", "", "", fmtBRL(calc.recebidoTotal)]],
+    styles: { fontSize: 9, cellPadding: 3 }, headStyles: { fillColor: [30, 42, 56], textColor: [245, 243, 238] },
+    footStyles: { fillColor: [248, 243, 231], textColor: [30, 42, 56], fontStyle: "bold" }
+  });
+  var oc = minhasOc(c);
+  doc.setFontSize(11); doc.setTextColor(30, 42, 56); doc.text("Ocorrências registradas", 14, doc.lastAutoTable.finalY + 10);
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 14, head: [["Data", "Critério", "Gravidade", "Descrição"]],
+    body: oc.length ? oc.map(function (o) { return [fmtData(o.data), critCurto(o.ind), GRAV[o.grav].label, o.desc]; }) : [["—", "—", "—", "Nenhuma ocorrência no trimestre."]],
+    styles: { fontSize: 8.5, cellPadding: 2.5 }, headStyles: { fillColor: [30, 42, 56], textColor: [245, 243, 238] },
+    columnStyles: { 0: { cellWidth: 22 }, 1: { cellWidth: 30 }, 2: { cellWidth: 20 } }
+  });
+  var y = doc.lastAutoTable.finalY + 10;
+  doc.setFontSize(11); doc.setTextColor(30, 42, 56); doc.text("Como o cálculo é feito", 14, y);
+  doc.setFontSize(9); doc.setTextColor(91, 107, 124); doc.text(doc.splitTextToSize(regrasTexto(), 182), 14, y + 6);
+  doc.save(nomeArquivo(c, "pdf"));
+}
+function baixarExcel() {
+  if (!window.XLSX) { showToast("Sem conexão para gerar o Excel.", "warning"); return; }
+  var c = colaboradores[activeIdx], calc = calcularColaborador(c), resto = Math.round((1 - SOMA_PESOS) * 100);
+  var data = [["Relatório de indicadores - Inserção de Materiais"], [DADOS.rotulo + " · Emitido em " + hojeStr()], [],
+    ["Colaborador", c.nome], ["Valor total", c.valorTotal], ["Valor possível (" + indicadores.length + " critérios)", calc.fatiaTotal], [],
+    ["Critério", "Leve", "Médio", "Alto", "Faixa", "% Desconto", "Fatia (R$)", "Recebido (R$)"]];
+  calc.linhas.forEach(function (l) { data.push([l.ind.nome, l.s.leve, l.s.medio, l.s.alto, l.faixa.label, l.faixa.pct, l.fatia, l.recebido]); });
+  if (c.equipe) { data.push([]); data.push(["Base (valor total - " + resto + "%)", "", "", "", "", "", "", calc.fatiaTotal]); data.push(["Desconto equipe (% equipe)", "", "", "", "", calc.fator, "", -calc.descontoEquipe]); }
+  data.push([]); data.push(["Total recebido no trimestre", "", "", "", "", calc.pctDescontoGeral, calc.fatiaTotal, calc.recebidoTotal]);
+  data.push([]); data.push(["Ocorrências registradas"]); data.push(["Data", "Critério", "Gravidade", "Status", "Descrição"]);
+  minhasOc(c).forEach(function (o) { data.push([fmtData(o.data), critCurto(o.ind), GRAV[o.grav].label, o.status || "—", o.desc]); });
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws["!cols"] = [{ wch: 32 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 60 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+  var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Relatório"); XLSX.writeFile(wb, nomeArquivo(c, "xlsx"));
+}
+
+/* ===================== CRITÉRIOS ===================== */
+function renderCriterios() {
+  document.getElementById("pesosBody").innerHTML = indicadores.map(function (c) {
+    return '<tr><td>' + esc(c.nome) + '</td><td>' + esc(c.descricao || "") + '</td><td class="num">' + Math.round(c.peso * 100) + '%</td></tr>';
+  }).join("") + '<tr><td><b>Total</b></td><td></td><td class="num"><b>' + Math.round(SOMA_PESOS * 100) + '%</b></td></tr>';
+  var sup = colaboradores.filter(function (c) { return c.equipe; }).map(function (c) { return c.nome; }).join(", ") || "A supervisão";
+  var resto = Math.round((1 - SOMA_PESOS) * 100);
+  document.getElementById("textoSupervisao").innerHTML = esc(sup) + ' não tem desconto pelos critérios próprios: tira os mesmos ' + resto + '% de todos' +
+    ' e depois aplica o <b>% da equipe</b>. % da equipe = soma do que ' + esc(NOMES_EQUIPE_TXT) + ' recebem ÷ soma do valor possível deles. Quando a equipe cai, a supervisão cai junto.';
+}
+
+function renderOthers() { renderVisao(); renderColabs(); }
+renderVisao(); renderOcorrencias(); renderColabs(); renderCalc(); renderCriterios();
+  </script>
+  {% endif %}
+</div>
+
+<script>
+// Abas (as duas versões da página) — a aba fica no endereço (#ocorrencias), então
+// depois de salvar uma ocorrência a página volta direto pra lista.
+function mostrarAba(nome) {
+  var achou = false;
+  document.querySelectorAll('.ind-aba').forEach(function (b) { var on = b.dataset.aba === nome; b.classList.toggle('ativo', on); achou = achou || on; });
+  if (!achou) return mostrarAba('visao');
+  document.querySelectorAll('.ind-sec').forEach(function (s) { s.classList.toggle('ativo', s.id === 'sec-' + nome); });
+  if (location.hash !== '#' + nome) history.replaceState(null, '', '#' + nome);
+}
+document.querySelectorAll('.ind-aba').forEach(function (b) { b.addEventListener('click', function () { mostrarAba(b.dataset.aba); }); });
+if (location.hash) mostrarAba(location.hash.slice(1));
+</script>
+{% endblock %}
