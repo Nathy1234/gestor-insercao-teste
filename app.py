@@ -7774,6 +7774,9 @@ _NOMES_FICTICIOS_PESSOA = [
     'Ana Exemplo', 'Bruno Modelo', 'Carla Fictícia', 'Diego Amostra',
     'Elisa Teste', 'Fábio Ilustrativo', 'Gabriela Demo', 'Hugo Simulado',
 ]
+# primeiros nomes a mais pra Feedbacks/Indicadores (ex-colaboradores etc.)
+_NOMES_FICTICIOS_EXTRAS = ['Igor', 'Júlia', 'Kléber', 'Larissa', 'Marcos', 'Nina', 'Otávio', 'Paula',
+                           'Renato', 'Sofia', 'Tiago', 'Vera']
 
 def _mapa_nomes_ficticios():
     """Mapa estável nome-real (da equipe atual) -> nome-fictício, sempre na
@@ -7784,12 +7787,9 @@ def _mapa_nomes_ficticios():
     return {_norm_name(nome): _NOMES_FICTICIOS_PESSOA[i % len(_NOMES_FICTICIOS_PESSOA)]
             for i, nome in enumerate(equipe)}
 
-def _gerar_dados_ficticios():
-    """Troca nome de curso/disciplina/professor/insersor/aluno/parceiro por
-    dado fictício — nunca mexe em número (valor, horas, datas, ids) nem em
-    conta de usuário (login quebraria). Usa o mapa estável da equipe, então
-    o mesmo nome real sempre vira o mesmo fictício — e bate com o que a
-    conta de demonstração vê no filtro de insersor do dashboard."""
+def _fabrica_fic_pessoa():
+    """Função nome-real -> nome-fictício (mapa estável da equipe; quem não é
+    da equipe vira "Colaborador Externo N", na ordem em que aparece)."""
     mapa_equipe = _mapa_nomes_ficticios()
     mapa_extras = {}
     def _fic_pessoa(nome_real):
@@ -7808,6 +7808,17 @@ def _gerar_dados_ficticios():
                     mapa_extras[p_norm] = f'Colaborador Externo {len(mapa_extras) + 1}'
                 ficticias.append(mapa_extras[p_norm])
         return ', '.join(ficticias)
+    return _fic_pessoa
+
+def _gerar_dados_ficticios():
+    """Troca nome de curso/disciplina/professor/insersor/aluno/parceiro por
+    dado fictício — nunca mexe em número (valor, horas, datas, ids) nem em
+    conta de usuário (login quebraria). Usa o mapa estável da equipe, então
+    o mesmo nome real sempre vira o mesmo fictício — e bate com o que a
+    conta de demonstração vê no filtro de insersor do dashboard. Inclui os
+    módulos de Feedbacks e Indicadores Trimestrais (dados de RH)."""
+    _ind_garantir_dados_iniciais()  # cria os trimestres antes, pra já saírem fictícios
+    _fic_pessoa = _fabrica_fic_pessoa()
 
     cursos = Course.query.order_by(Course.id).all()
     for i, c in enumerate(cursos):
@@ -7839,6 +7850,8 @@ def _gerar_dados_ficticios():
     for i, t in enumerate(terceiros):
         t.terceiro = f'Parceiro Fictício {i + 1:03d}'
 
+    rh = _ficticio_feedbacks_e_indicadores(_fic_pessoa)
+
     setting = AppSetting.query.get('dados_ficticios_ativos')
     if not setting:
         setting = AppSetting(key='dados_ficticios_ativos')
@@ -7847,7 +7860,103 @@ def _gerar_dados_ficticios():
 
     db.session.commit()
     return {'cursos': len(cursos), 'disciplinas': len(discs),
-            'reembolsos': len(refunds), 'terceiros': len(terceiros)}
+            'reembolsos': len(refunds), 'terceiros': len(terceiros), **rh}
+
+_FIC_FEEDBACK_TEXTO = {
+    'positivo': ('Olá, {nome}.\n\nSegue o resumo fictício do seu desempenho no período.\n\n'
+                 '**Destaques**\n\n- Entregas dentro do prazo.\n- Boa comunicação com a equipe.\n\n'
+                 'Continue assim!\n\nAtenciosamente,'),
+    'melhoria': ('Olá, {nome}.\n\nSegue o resumo fictício do seu desempenho no período.\n\n'
+                 '**Pontos de atenção**\n\n- Conferir os materiais antes de liberar.\n\n'
+                 '**Direcionamentos**\n\n- Utilizar o checklist.\n- Comunicar atrasos com antecedência.\n\nAtenciosamente,'),
+    'misto': ('Olá, {nome}.\n\nSegue o resumo fictício do seu desempenho no período.\n\n'
+              '**O que foi bem**\n\n- Volume de entregas consistente.\n\n'
+              '**O que melhorar**\n\n- Atenção aos prazos das demandas prioritárias.\n\nAtenciosamente,'),
+}
+
+def _ficticio_feedbacks_e_indicadores(fic_pessoa):
+    """Feedbacks e Indicadores com nomes/textos/links de exemplo. Os nomes
+    reais que aparecem soltos em textos (ex: "Stefanye, Natalia (meta) e
+    Felipe") também são trocados, pelo mesmo mapa. Números ficam iguais."""
+    def primeiro(nome):
+        return ((nome or '').split() or [''])[0]
+    pool = [primeiro(n) for n in _NOMES_FICTICIOS_PESSOA] + _NOMES_FICTICIOS_EXTRAS
+    ja_ficticios = {_norm_name(n) for n in pool} | {'COLABORADOR', 'REGISTROS', 'PARCEIRO', 'ALUNO'}
+    # nome real (primeiro nome) -> primeiro nome fictício: quem tem conta na
+    # equipe usa o mesmo mapa do resto do sistema; os demais ganham o próximo
+    # nome livre da lista (cada pessoa um nome diferente, sempre na mesma ordem)
+    ordem_reais = [primeiro(p.nome) for p in IndicadorParticipante.query.join(IndicadorTrimestre)
+                   .order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre, IndicadorParticipante.ordem).all()]
+    ordem_reais += [primeiro(c.nome) for c in FeedbackColaborador.query.filter_by(categoria='colaborador')
+                    .order_by(FeedbackColaborador.id).all()]
+    ordem_reais += [primeiro(u.nome) for u in User.query.order_by(User.id).all() if u.nome]
+    troca = {}
+    usados = set()
+    for r in ordem_reais:
+        n = _norm_name(r)
+        if len(r) > 2 and n not in ja_ficticios and n not in troca:
+            fic = primeiro(fic_pessoa(r))
+            if not fic or _norm_name(fic) in ('COLABORADOR', '') or _norm_name(fic) in usados:
+                fic = next((x for x in pool if _norm_name(x) not in usados), f'Pessoa{len(troca) + 1}')
+            troca[n] = fic
+            usados.add(_norm_name(fic))
+    def trocar_nomes(texto):
+        if not texto or not troca:
+            return texto
+        def sub(m):
+            fic = troca.get(_norm_name(m.group(0)))
+            if not fic:
+                return m.group(0)
+            return fic.upper() if m.group(0).isupper() else fic
+        return _re.sub(r'[A-Za-zÀ-ÿ]+', sub, texto)
+
+    colabs = FeedbackColaborador.query.order_by(FeedbackColaborador.id).all()
+    for i, c in enumerate(colabs):
+        if c.categoria == 'equipe':
+            c.nome = f'REGISTROS DA EQUIPE {i + 1}'
+        elif _norm_name(primeiro(c.nome)) in ja_ficticios:
+            pass  # já é fictício (rodou antes) — mantém
+        else:
+            fic = troca.get(_norm_name(primeiro(c.nome)), f'Pessoa{i + 1}')
+            c.nome = fic.upper()
+            c.nome_tratamento = fic
+            c.email = f'{_norm_name(fic).lower()}@exemplo.com'
+        c.trello_lista = f'Lista fictícia {i + 1}' if c.trello_lista else None
+        c.perfil = 'Perfil fictício de demonstração — responsabilidades e horários de exemplo.' if c.perfil else None
+    fbs = Feedback.query.order_by(Feedback.id).all()
+    for f in fbs:
+        nome = f.colaborador.nome_email if f.colaborador else 'Colaborador'
+        rotulo = dict(FEEDBACK_TIPOS).get(f.tipo, 'Feedback').split(' ')[0].upper()
+        f.titulo = f'FEEDBACK {rotulo} - {nome.upper()} ({f.periodo_label})'
+        f.assunto = f'Feedback {rotulo.lower()} — {f.periodo_label} — {nome}'
+        if f.conteudo:
+            f.conteudo = _FIC_FEEDBACK_TEXTO.get(f.tom, _FIC_FEEDBACK_TEXTO['misto']).format(nome=nome)
+        f.registro_extra = None
+        if f.enviado_para:
+            f.enviado_para = 'colaborador@exemplo.com'
+    for o in FeedbackObservacao.query.all():
+        o.texto = {'positivo': 'Evolução positiva observada (exemplo).',
+                   'melhoria': 'Ponto de atenção observado (exemplo).'}.get(o.tom, 'Observação fictícia de acompanhamento.')
+
+    for p in IndicadorParticipante.query.all():
+        p.nome = trocar_nomes(p.nome)
+        if p.historico:
+            h = json.loads(p.historico)
+            h['nome'] = p.nome
+            if h.get('links'):
+                h['links'] = [{'t': 'Relatório de exemplo', 'u': 'https://exemplo.com', 'icone': '🔗'}]
+            p.historico = json.dumps(json.loads(trocar_nomes(json.dumps(h, ensure_ascii=False))), ensure_ascii=False)
+    for t in IndicadorTrimestre.query.all():
+        if t.historico:
+            t.historico = trocar_nomes(t.historico)
+        if t.observacoes:
+            t.observacoes = trocar_nomes(t.observacoes)
+    ocs = IndicadorOcorrencia.query.all()
+    for o in ocs:
+        o.descricao = f'Ocorrência fictícia de demonstração (gravidade {dict(IND_GRAVIDADES).get(o.gravidade, "")}).'
+        if o.links and o.links != '[]':
+            o.links = json.dumps([{'t': 'Referência de exemplo', 'u': 'https://exemplo.com'}], ensure_ascii=False)
+    return {'feedbacks': len(fbs), 'colaboradores_feedback': len(colabs), 'ocorrencias_indicadores': len(ocs)}
 
 def _dados_ficticios_ativos():
     setting = AppSetting.query.get('dados_ficticios_ativos')
@@ -10533,6 +10642,10 @@ def feedback_importar():
             escolhas[lst['id']] = {'acao': acao, 'nome': request.form.get(f'nome_{lst["id"]}')}
     try:
         cont = _trello_importar(dados, escolhas, session['user_id'])
+        if _dados_ficticios_ativos():
+            # banco de teste/demonstração: o que veio do Trello também vira fictício
+            _ficticio_feedbacks_e_indicadores(_fabrica_fic_pessoa())
+            db.session.commit()
     except Exception:
         db.session.rollback()
         import traceback
@@ -10727,6 +10840,9 @@ def _ind_garantir_dados_iniciais():
     db.session.add(AppSetting(key='indicadores_dados_iniciais', value='1'))
     db.session.commit()
     _ind_ajustes_equipe_4tri_2026()
+    if _dados_ficticios_ativos():
+        _ficticio_feedbacks_e_indicadores(_fabrica_fic_pessoa())
+        db.session.commit()
 
 def _ind_valor(texto):
     """'1.500,00' / '1500.5' / 'R$ 2.000' → float; vazio/inválido → None."""

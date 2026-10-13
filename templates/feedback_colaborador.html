@@ -8,11 +8,11 @@
   <div class="form-grid">
     <div class="form-group">
       <label>Nome (como no Trello) *</label>
-      <input type="text" name="nome" value="{{ c.nome if c else '' }}" required placeholder="Ex: JUNIOR">
+      <input type="text" name="nome" value="{{ c.nome if c else '' }}" required placeholder="Ex: MARIA">
     </div>
     <div class="form-group">
       <label>Como chamar no e-mail</label>
-      <input type="text" name="nome_tratamento" value="{{ c.nome_tratamento or '' if c else '' }}" placeholder="Ex: Junior">
+      <input type="text" name="nome_tratamento" value="{{ c.nome_tratamento or '' if c else '' }}" placeholder="Ex: Maria">
     </div>
     <div class="form-group">
       <label>E-mail</label>
