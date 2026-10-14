@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.33.0'
+VERSAO = '1.34.0'
 NO_AR_DESDE = 'março de 2026'
 
 @app.context_processor
@@ -1052,6 +1052,7 @@ class IndicadorParticipante(db.Model):
     supervisao   = db.Column(db.Boolean, default=False)  # descontada pelo % da equipe
     inicio       = db.Column(db.Date)  # vazio = desde o 1º dia do trimestre
     fim          = db.Column(db.Date)  # vazio = até o último dia (ex: troca de gestão no meio do trimestre)
+    ativo        = db.Column(db.Boolean, default=True)  # False = fora deste trimestre (fica guardado, sai do cálculo)
     ordem        = db.Column(db.Integer, default=0)
     historico    = db.Column(db.Text)  # JSON (trimestres fechados no modelo antigo)
 
@@ -1173,6 +1174,7 @@ class Demanda(db.Model):
     data_fim       = db.Column(db.Date, nullable=False)
     status         = db.Column(db.String(20), default='andamento')
     responsaveis   = db.Column(db.Text)  # ids de User separados por vírgula, ex: "3,7"
+    modulo_trabalhado = db.Column(db.String(10))  # "2026/4" = 4º trimestre de 2026 (out–dez)
     created_by     = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -6642,6 +6644,89 @@ def _responsaveis_validos_ids(form):
     postados = [int(x) for x in form.getlist('responsavel_ids') if x.isdigit()]
     return [x for x in postados if x in permitidos]
 
+# ── Módulo trabalhado das Demandas: "ano/trimestre" (1 = jan–mar, 2 = abr–jun,
+# 3 = jul–set, 4 = out–dez). Lista editável (o admin acrescenta conforme a
+# necessidade), guardada em AppSetting; inclui sempre o módulo atual e os que
+# já estão em alguma demanda.
+_RE_MODULO_TRABALHADO = _re.compile(r'^(\d{4})/([1-4])$')
+_MESES_DO_TRIMESTRE = {1: 'jan–mar', 2: 'abr–jun', 3: 'jul–set', 4: 'out–dez'}
+MODULO_DEMANDAS_INICIAL = '2026/4'  # módulo das demandas que já existiam quando o campo foi criado
+
+def _modulo_atual():
+    hoje = date.today()
+    return f'{hoje.year}/{(hoje.month - 1) // 3 + 1}'
+
+def _modulo_label(m):
+    r = _RE_MODULO_TRABALHADO.match(m or '')
+    return f'{m} · {_MESES_DO_TRIMESTRE[int(r.group(2))]}' if r else (m or 'Sem módulo')
+
+def _modulos_trabalhados():
+    cadastrados = set()
+    s = AppSetting.query.get('modulos_trabalhados')
+    if s and s.value:
+        try:
+            cadastrados = set(json.loads(s.value))
+        except ValueError:
+            pass
+    usados = {m for (m,) in db.session.query(Demanda.modulo_trabalhado).distinct() if m}
+    todos = {m for m in cadastrados | usados | {_modulo_atual()} if _RE_MODULO_TRABALHADO.match(m)}
+    return sorted(todos, key=lambda m: tuple(int(x) for x in m.split('/')))
+
+def _salvar_modulo_trabalhado(m):
+    s = AppSetting.query.get('modulos_trabalhados') or AppSetting(key='modulos_trabalhados', value='[]')
+    try:
+        lista = set(json.loads(s.value or '[]'))
+    except ValueError:
+        lista = set()
+    lista.add(m)
+    s.value = json.dumps(sorted(lista))
+    db.session.add(s)
+
+def _demandas_modulo_inicial():
+    """Uma vez só: as demandas que já existiam ficam no módulo 2026/4."""
+    if AppSetting.query.get('demandas_modulo_inicial'):
+        return
+    Demanda.query.filter(Demanda.modulo_trabalhado.is_(None)).update(
+        {'modulo_trabalhado': MODULO_DEMANDAS_INICIAL}, synchronize_session=False)
+    _salvar_modulo_trabalhado(MODULO_DEMANDAS_INICIAL)
+    db.session.add(AppSetting(key='demandas_modulo_inicial', value='1'))
+    db.session.commit()
+
+def _modulo_do_form(valor):
+    valor = (valor or '').strip()
+    return valor if _RE_MODULO_TRABALHADO.match(valor) else _modulo_atual()
+
+@app.route('/calendario/modulos-trabalhados/novo', methods=['POST'])
+@admin_required
+def calendario_modulo_trabalhado_novo():
+    ano, tri = request.form.get('ano', type=int), request.form.get('trimestre', type=int)
+    if not ano or not 2000 <= ano <= 2100 or tri not in (1, 2, 3, 4):
+        flash('Informe o ano e o trimestre do módulo.', 'danger')
+        return redirect(url_for('calendario', aba='lista'))
+    m = f'{ano}/{tri}'
+    _salvar_modulo_trabalhado(m)
+    db.session.commit()
+    flash(f'Módulo {_modulo_label(m)} adicionado.', 'success')
+    return redirect(url_for('calendario', aba='lista', modulo=m))
+
+@app.route('/calendario/modulos-trabalhados/remover', methods=['POST'])
+@admin_required
+def calendario_modulo_trabalhado_remover():
+    m = request.form.get('modulo') or ''
+    if Demanda.query.filter_by(modulo_trabalhado=m).first():
+        flash('Esse módulo tem demandas — mova as demandas para outro módulo antes de remover.', 'danger')
+        return redirect(url_for('calendario', aba='lista', modulo=m))
+    s = AppSetting.query.get('modulos_trabalhados')
+    if s and s.value:
+        try:
+            lista = [x for x in json.loads(s.value) if x != m]
+            s.value = json.dumps(lista)
+            db.session.commit()
+        except ValueError:
+            pass
+    flash(f'Módulo {m} removido da lista.', 'success')
+    return redirect(url_for('calendario', aba='lista'))
+
 @app.route('/calendario')
 @perm_check('can_view_calendario')
 def calendario():
@@ -6650,9 +6735,19 @@ def calendario():
                                   request.args.get('mes', type=int) or hoje.month)
     semanas, por_dia, demandas_mes = _grade_calendario(ano, mes)
 
+    _demandas_modulo_inicial()
     status_filtro = request.args.get('status') or ''
     responsavel_filtro = request.args.get('responsavel', type=int)
+    modulos_trabalhados = _modulos_trabalhados()
+    modulo_atual = _modulo_atual()
+    modulo_filtro = request.args.get('modulo') or modulo_atual  # 'todos' = sem filtro
+    if modulo_filtro != 'todos' and not _RE_MODULO_TRABALHADO.match(modulo_filtro):
+        modulo_filtro = modulo_atual
+    contagem_modulos = dict(db.session.query(Demanda.modulo_trabalhado, db.func.count(Demanda.id))
+                            .group_by(Demanda.modulo_trabalhado).all())
     lista_q = Demanda.query
+    if modulo_filtro != 'todos':
+        lista_q = lista_q.filter_by(modulo_trabalhado=modulo_filtro)
     if status_filtro in STATUS_DEMANDA:
         lista_q = lista_q.filter_by(status=status_filtro)
     lista_demandas = lista_q.order_by(Demanda.data_fim).all()
@@ -6666,7 +6761,7 @@ def calendario():
         d.id: {
             'id': d.id, 'titulo': d.titulo, 'descricao': d.descricao or '',
             'data_inicio': d.data_inicio.isoformat(), 'data_fim': d.data_fim.isoformat(),
-            'status': d.status, 'responsavel_ids': d.responsaveis_ids(),
+            'status': d.status, 'responsavel_ids': d.responsaveis_ids(), 'modulo': d.modulo_trabalhado or '',
             'pode_editar': d.pode_editar(u),
             'pode_registrar_status': d.pode_registrar_status(u),
             'alerta_ativo': d.alerta_ativo, 'alerta_texto': d.alerta_texto or '',
@@ -6734,6 +6829,8 @@ def calendario():
         ano_ant=ano_ant, mes_ant=mes_ant, ano_prox=ano_prox, mes_prox=mes_prox,
         lista_demandas=lista_demandas, usuarios=usuarios, status_filtro=status_filtro,
         responsavel_filtro=responsavel_filtro, demandas_json=demandas_json,
+        modulos_trabalhados=modulos_trabalhados, modulo_atual=modulo_atual, modulo_filtro=modulo_filtro,
+        contagem_modulos=contagem_modulos, modulo_label=_modulo_label,
         STATUS_DEMANDA=STATUS_DEMANDA, STATUS_LABEL=STATUS_DEMANDA_LABEL,
         aba=aba, modulos=modulos, STATUS_DISC=STATUS_DISC_MODULO, STATUS_DISC_LABEL=STATUS_DISC_MODULO_LABEL,
         STATUS_DISC_COR=STATUS_DISC_MODULO_COR,
@@ -6811,8 +6908,10 @@ def calendario_nova():
         return redirect(_voltar_seguro(url_for('calendario', aba='calendario')))
     status = d.get('status') if d.get('status') in STATUS_DEMANDA else 'andamento'
     responsaveis_ids = _responsaveis_validos_ids(d)
+    modulo = _modulo_do_form(d.get('modulo_trabalhado'))
+    _salvar_modulo_trabalhado(modulo)
     demanda = Demanda(titulo=titulo, descricao=(d.get('descricao') or '').strip() or None,
-                       data_inicio=data_inicio, data_fim=data_fim, status=status,
+                       data_inicio=data_inicio, data_fim=data_fim, status=status, modulo_trabalhado=modulo,
                        responsaveis=','.join(str(x) for x in responsaveis_ids) or None,
                        created_by=session['user_id'])
     db.session.add(demanda)
@@ -6838,6 +6937,9 @@ def calendario_editar(id):
     demanda.data_inicio = data_inicio
     demanda.data_fim = data_fim
     demanda.responsaveis = ','.join(str(x) for x in _responsaveis_validos_ids(d)) or None
+    if d.get('modulo_trabalhado'):
+        demanda.modulo_trabalhado = _modulo_do_form(d.get('modulo_trabalhado'))
+        _salvar_modulo_trabalhado(demanda.modulo_trabalhado)
     if d.get('status') in STATUS_DEMANDA:
         demanda.status = d.get('status')
     db.session.commit()
@@ -7307,6 +7409,9 @@ def calendario_exportar():
     q = Demanda.query
     status_filtro = request.args.get('status') or ''
     responsavel_filtro = request.args.get('responsavel', type=int)
+    modulo_filtro = request.args.get('modulo') or ''
+    if _RE_MODULO_TRABALHADO.match(modulo_filtro):
+        q = q.filter_by(modulo_trabalhado=modulo_filtro)
     if status_filtro in STATUS_DEMANDA:
         q = q.filter_by(status=status_filtro)
     demandas = q.order_by(Demanda.data_fim).all()
@@ -7321,7 +7426,7 @@ def calendario_exportar():
     ws = wb.active
     ws.title = 'Demandas'
 
-    cabecalho = ['Demanda', 'Descrição', 'Responsável', 'Início', 'Prazo', 'Andamento', 'Criado por', 'Criado em']
+    cabecalho = ['Módulo', 'Demanda', 'Descrição', 'Responsável', 'Início', 'Prazo', 'Andamento', 'Criado por', 'Criado em']
     ws.append(cabecalho)
     for col in range(1, len(cabecalho) + 1):
         c = ws.cell(row=1, column=col)
@@ -7332,6 +7437,7 @@ def calendario_exportar():
     for d in demandas:
         nomes_resp = ', '.join(nome_exibicao(r) for r in d.responsaveis_usuarios())
         ws.append([
+            d.modulo_trabalhado or '',
             d.titulo,
             d.descricao or '',
             nomes_resp or '—',
@@ -7342,7 +7448,7 @@ def calendario_exportar():
             d.created_at.strftime('%d/%m/%Y %H:%M') if d.created_at else '',
         ])
 
-    for col, w in enumerate([30, 40, 22, 14, 14, 16, 22, 18], start=1):
+    for col, w in enumerate([10, 30, 40, 22, 14, 14, 16, 22, 18], start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
     buf = io.BytesIO()
@@ -9548,6 +9654,8 @@ def _run_migrations():
         ("mural_log", "autor_nome", "VARCHAR(200)"),
         ("mural_log", "id_externo", "VARCHAR(200)"),
         ("indicador_participante", "inicio", "DATE"),
+        ("demanda", "modulo_trabalhado", "VARCHAR(10)"),
+        ("indicador_participante", "ativo", "BOOLEAN DEFAULT true"),
         ("indicador_participante", "fim", "DATE"),
     ]
     with db.engine.connect() as conn:
@@ -10489,7 +10597,7 @@ def _fb_indicadores_da_pessoa(nome):
     saida = []
     tris = IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre).all()
     for t in tris:
-        parts = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo]
+        parts = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo and p.ativo is not False]
         if not parts:
             continue
         pct = None
@@ -10954,7 +11062,7 @@ def ind_calcular_trimestre(trimestre, ate=None):
     da equipe medido só no período em que foi gestora (ocorrências da
     equipe dentro desse período)."""
     criterios = trimestre.criterios_lista()
-    participantes = trimestre.participantes.order_by(IndicadorParticipante.ordem).all()
+    participantes = [p for p in trimestre.participantes.order_by(IndicadorParticipante.ordem).all() if p.ativo is not False]
     ocorrencias = IndicadorOcorrencia.query.filter_by(trimestre_id=trimestre.id).all()
     periodos = {p.id: p.periodo() for p in participantes}
 
@@ -11148,8 +11256,10 @@ def _ind_participante_json(p):
 
 def _ind_trimestre_json(t):
     """Tudo que a página precisa pra calcular no navegador (mesma regra do HTML)."""
-    parts = t.participantes.order_by(IndicadorParticipante.ordem, IndicadorParticipante.id).all()
-    ocs = IndicadorOcorrencia.query.filter_by(trimestre_id=t.id).order_by(IndicadorOcorrencia.data, IndicadorOcorrencia.id).all()
+    parts = [p for p in t.participantes.order_by(IndicadorParticipante.ordem, IndicadorParticipante.id).all() if p.ativo is not False]
+    ids_ativos = {p.id for p in parts}
+    ocs = [o for o in IndicadorOcorrencia.query.filter_by(trimestre_id=t.id).order_by(IndicadorOcorrencia.data, IndicadorOcorrencia.id).all()
+           if o.participante_id in ids_ativos]
     meses = []
     for m in range((t.trimestre - 1) * 3 + 1, (t.trimestre - 1) * 3 + 4):
         ultimo = _calendar.monthrange(t.ano, m)[1]
@@ -11192,6 +11302,8 @@ def _ind_contexto(t, exportar=False):
                                   t.participantes.order_by(IndicadorParticipante.ordem).all()]
     else:
         contexto['dados'] = _ind_trimestre_json(t)
+        contexto['inativos'] = [p for p in t.participantes.order_by(IndicadorParticipante.ordem).all() if p.ativo is False]
+        contexto['ocs_inativos'] = {p.id: IndicadorOcorrencia.query.filter_by(participante_id=p.id).count() for p in contexto['inativos']}
     return contexto
 
 def _ind_html_exportado(t):
@@ -11288,6 +11400,8 @@ def _ind_ler_ocorrencia(t, o, form):
     grav = form.get('gravidade')
     if not part or part.supervisao:
         return 'Escolha o colaborador.'
+    if part.ativo is False:
+        return f'{part.nome} está inativo neste trimestre — reative na aba Colaboradores para lançar ocorrências.'
     if crit is None or not 0 <= crit < len(t.criterios_lista()):
         return 'Escolha o critério.'
     if grav not in dict(IND_GRAVIDADES):
@@ -11345,6 +11459,21 @@ def indicador_ocorrencia_excluir(id):
         flash('Ocorrência excluída.', 'success')
     return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) + '#ocorrencias')
 
+@app.route('/gestao/indicadores/participante/<int:id>/ativo', methods=['POST'])
+@admin_required
+def indicador_participante_ativo(id):
+    """Inativa/reativa alguém só neste trimestre — sai do cálculo e do % da
+    equipe, mas nada é apagado (ocorrências ficam guardadas)."""
+    p = IndicadorParticipante.query.get_or_404(id)
+    t = p.trimestre
+    if t.status != 'aberto':
+        flash('Trimestre fechado — reabra para mudar a equipe.', 'warning')
+    else:
+        p.ativo = p.ativo is False
+        db.session.commit()
+        flash(f'{p.nome} {"reativado(a)" if p.ativo else "inativado(a)"} no {t.rotulo} — indicadores recalculados.', 'success')
+    return redirect(url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre) + '#colaboradores')
+
 @app.route('/gestao/indicadores/<int:id>/status', methods=['POST'])
 @admin_required
 def indicador_status(id):
@@ -11397,6 +11526,7 @@ def indicador_configurar(id):
             if valor is not None:
                 p.valor_total = valor
             p.supervisao = f.get(f'part_sup_{p.id}') == '1'
+            p.ativo = f.get(f'part_ativo_{p.id}') == '1'
             p.ordem = _fb_int(f.get(f'part_ordem_{p.id}')) or 0
             p.inicio = _fb_data(f.get(f'part_inicio_{p.id}'))
             p.fim = _fb_data(f.get(f'part_fim_{p.id}'))
@@ -11432,7 +11562,8 @@ def indicadores_configurar_novo():
         db.session.add(t)
         db.session.flush()
         # Só quem continuava na equipe no fim do trimestre-base (sem data de saída)
-        origem = [p for p in (base.participantes.order_by(IndicadorParticipante.ordem).all() if base else []) if not p.fim]
+        origem = [p for p in (base.participantes.order_by(IndicadorParticipante.ordem).all() if base else [])
+                  if not p.fim and p.ativo is not False]
         for i, p in enumerate(origem):
             db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=p.nome, funcao=p.funcao, valor_total=p.valor_total,
                                                  supervisao=p.supervisao, ordem=i))
@@ -11456,7 +11587,7 @@ def feedback_api_indicadores(id):
                                                                             IndicadorTrimestre.trimestre.desc()).all()
     for t in tris:
         # quem tem ocorrência é a pessoa como integrante da equipe (não como gestora)
-        candidatos = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo]
+        candidatos = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo and p.ativo is not False]
         part = next((p for p in candidatos if not p.supervisao), None) or (candidatos[0] if candidatos else None)
         if not part:
             continue

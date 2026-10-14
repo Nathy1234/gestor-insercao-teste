@@ -107,7 +107,7 @@
   <!-- ═══════════════════════ ABA: LISTA DE DEMANDAS ═══════════════════════ -->
   <div class="page-header" style="margin-bottom:14px">
     <div class="card-title" style="font-size:15px">Lista de Demandas</div>
-    <a href="{{ url_for('calendario_exportar', status=status_filtro, responsavel=responsavel_filtro) }}" class="btn btn-secondary">
+    <a href="{{ url_for('calendario_exportar', status=status_filtro, responsavel=responsavel_filtro, modulo=('' if modulo_filtro == 'todos' else modulo_filtro)) }}" class="btn btn-secondary">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
@@ -115,8 +115,43 @@
     </a>
   </div>
 
+  <style>
+    .mod-abas { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+    .mod-aba { text-decoration:none; border:1px solid var(--border); background:var(--surface); color:var(--text);
+               padding:6px 12px; border-radius:999px; font-size:12.5px; font-weight:600; white-space:nowrap; }
+    .mod-aba:hover { border-color:var(--primary); }
+    .mod-aba.ativo { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .mod-aba small { font-weight:500; opacity:.8; }
+    .mod-novo { display:inline-flex; gap:6px; align-items:center; margin-left:auto; }
+    .mod-novo input, .mod-novo select { width:auto; padding:5px 8px; font-size:12.5px; }
+  </style>
+  <div class="mod-abas">
+    <span style="font-size:12px;color:var(--text-muted);font-weight:600;margin-right:2px">Módulo trabalhado:</span>
+    {% for m in modulos_trabalhados %}
+    <a href="{{ url_for('calendario', aba='lista', modulo=m, status=status_filtro or None, responsavel=responsavel_filtro) }}"
+       class="mod-aba {% if modulo_filtro == m %}ativo{% endif %}" title="{{ modulo_label(m) }}">
+      {{ modulo_label(m) }} <small>({{ contagem_modulos.get(m, 0) }}){% if m == modulo_atual %} · atual{% endif %}</small>
+    </a>
+    {% endfor %}
+    <a href="{{ url_for('calendario', aba='lista', modulo='todos', status=status_filtro or None, responsavel=responsavel_filtro) }}"
+       class="mod-aba {% if modulo_filtro == 'todos' %}ativo{% endif %}">Todos <small>({{ contagem_modulos.values()|sum }})</small></a>
+    {% if is_admin %}
+    <form method="POST" action="{{ url_for('calendario_modulo_trabalhado_novo') }}" class="mod-novo" title="Adicionar módulo à lista">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="number" name="ano" value="{{ modulo_atual.split('/')[0]|int + (1 if modulo_atual.endswith('/4') else 0) }}" min="2020" max="2100" style="width:78px" required>
+      <select name="trimestre">
+        {% for t, meses in [(1,'jan–mar'),(2,'abr–jun'),(3,'jul–set'),(4,'out–dez')] %}
+        <option value="{{ t }}" {% if t == (modulo_atual.split('/')[1]|int % 4) + 1 %}selected{% endif %}>/{{ t }} · {{ meses }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-secondary btn-sm">+ Módulo</button>
+    </form>
+    {% endif %}
+  </div>
+
   <form method="GET" action="{{ url_for('calendario') }}" class="filters">
     <input type="hidden" name="aba" value="lista">
+    <input type="hidden" name="modulo" value="{{ modulo_filtro }}">
     <select name="status" class="filter-select" onchange="this.form.submit()">
       <option value="">Todos os status</option>
       {% for s in STATUS_DEMANDA %}
@@ -135,6 +170,7 @@
     <table class="table">
       <thead>
         <tr>
+          <th>Módulo</th>
           <th>Demanda</th>
           <th>Responsável(is)</th>
           <th>Início</th>
@@ -146,6 +182,7 @@
       <tbody>
         {% for d in lista_demandas %}
         <tr>
+          <td style="white-space:nowrap"><span class="badge" style="background:var(--primary-light);color:var(--primary)">{{ d.modulo_trabalhado or '—' }}</span></td>
           <td>
             {{ d.titulo }}
             {% if d.descricao %}
@@ -198,7 +235,15 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">Nenhuma demanda encontrada.</td></tr>
+        <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">Nenhuma demanda {% if modulo_filtro != 'todos' %}no módulo {{ modulo_label(modulo_filtro) }}{% else %}encontrada{% endif %}.
+          {% if is_admin and modulo_filtro != 'todos' and not contagem_modulos.get(modulo_filtro) and modulo_filtro != modulo_atual %}
+          <form method="POST" action="{{ url_for('calendario_modulo_trabalhado_remover') }}" style="display:inline;margin-left:8px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="modulo" value="{{ modulo_filtro }}">
+            <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Remover o módulo {{ modulo_filtro }} da lista?">Remover este módulo da lista</button>
+          </form>
+          {% endif %}
+        </td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -824,6 +869,12 @@
           <label>Descrição</label>
           <textarea name="descricao" id="calDescricao" rows="3" style="width:100%;resize:vertical"></textarea>
         </div>
+        <div class="form-group">
+          <label>Módulo trabalhado</label>
+          <select name="modulo_trabalhado" id="calModulo">
+            {% for m in modulos_trabalhados %}<option value="{{ m }}">{{ modulo_label(m) }}{% if m == modulo_atual %} (atual){% endif %}</option>{% endfor %}
+          </select>
+        </div>
         <div class="form-grid">
           <div class="form-group">
             <label>Início</label>
@@ -1210,6 +1261,8 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
 <script>
   const CAL_DEMANDAS = {{ demandas_json|tojson }};
   const CAL_URL_NOVA = "{{ url_for('calendario_nova') }}";
+  const CAL_MODULO_ATUAL = {{ modulo_atual|tojson }};
+  const CAL_MODULO_FILTRO = {{ modulo_filtro|tojson }};
   const CAL_IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 
   function calCopiarLinkPublico(btn) {
@@ -1260,6 +1313,8 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
     document.getElementById('calResponsavelVisivel').name = 'responsavel_ids';
     document.getElementById('calStatus').value = 'andamento';
     document.getElementById('calStatus').disabled = false;
+    document.getElementById('calModulo').value = (CAL_MODULO_FILTRO && CAL_MODULO_FILTRO !== 'todos') ? CAL_MODULO_FILTRO : CAL_MODULO_ATUAL;
+    document.getElementById('calModulo').disabled = false;
     document.getElementById('calBtnExcluir').style.display = 'none';
     document.getElementById('calBtnSalvar').style.display = '';
     document.getElementById('calModalOverlay').style.display = 'flex';
@@ -1280,8 +1335,9 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
     document.getElementById('calDataFim').value = dem.data_fim;
     calSetMultiplos(document.getElementById('calResponsavelVisivel'), dem.responsavel_ids);
     document.getElementById('calStatus').value = dem.status;
+    document.getElementById('calModulo').value = dem.modulo || CAL_MODULO_ATUAL;
 
-    ['calTitulo','calDescricao','calDataInicio','calDataFim','calResponsavelVisivel'].forEach(function(elId) {
+    ['calTitulo','calDescricao','calDataInicio','calDataFim','calResponsavelVisivel','calModulo'].forEach(function(elId) {
       document.getElementById(elId).disabled = true;
     });
     document.getElementById('calTitulo').name = '';
@@ -1289,7 +1345,7 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
     document.getElementById('calStatus').disabled = !(modoCompleto || modoStatus);
 
     if (modoCompleto) {
-      ['calTitulo','calDescricao','calDataInicio','calDataFim','calResponsavelVisivel'].forEach(function(elId) {
+      ['calTitulo','calDescricao','calDataInicio','calDataFim','calResponsavelVisivel','calModulo'].forEach(function(elId) {
         document.getElementById(elId).disabled = false;
       });
       document.getElementById('calTitulo').name = 'titulo';

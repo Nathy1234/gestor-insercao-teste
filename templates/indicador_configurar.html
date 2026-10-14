@@ -14,7 +14,7 @@
     <div class="section-label">Equipe</div>
     <div class="card" style="margin-bottom:20px"><div class="table-wrapper">
       <table style="min-width:1000px">
-        <thead><tr><th>Ordem</th><th>Nome</th><th>Função</th><th>Valor total (R$)</th><th>Atua desde</th><th>Atua até</th><th>Supervisão*</th><th>Remover</th></tr></thead>
+        <thead><tr><th>Ordem</th><th>Nome</th><th>Função</th><th>Valor total (R$)</th><th>Atua desde</th><th>Atua até</th><th>Supervisão*</th><th>Ativo</th><th>Remover</th></tr></thead>
         <tbody>
         {% for p in participantes %}
         <tr>
@@ -25,6 +25,7 @@
           <td style="width:140px"><input type="date" name="part_inicio_{{ p.id }}" value="{{ p.inicio.isoformat() if p.inicio else '' }}"></td>
           <td style="width:140px"><input type="date" name="part_fim_{{ p.id }}" value="{{ p.fim.isoformat() if p.fim else '' }}"></td>
           <td style="text-align:center"><input type="checkbox" name="part_sup_{{ p.id }}" value="1" {% if p.supervisao %}checked{% endif %}></td>
+          <td style="text-align:center"><input type="checkbox" name="part_ativo_{{ p.id }}" value="1" {% if p.ativo is not false %}checked{% endif %} title="Desmarque para tirar do cálculo deste trimestre sem apagar nada"></td>
           <td style="text-align:center"><input type="checkbox" name="part_remover_{{ p.id }}" value="1" title="Só remove quem não tem ocorrência lançada"></td>
         </tr>
         {% endfor %}
@@ -36,6 +37,7 @@
           <td><input type="date" name="novo_inicio"></td>
           <td><input type="date" name="novo_fim"></td>
           <td style="text-align:center"><input type="checkbox" name="novo_sup" value="1"></td>
+          <td></td>
           <td></td>
         </tr>
         </tbody>

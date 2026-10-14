@@ -393,6 +393,25 @@ Atenciosamente,</textarea></div>
     <div class="ind-h2">Feedback por Colaborador</div>
     <div class="ind-sub">Gravidade das ocorrências e quanto já afetou cada indicador até o momento</div>
     <div class="colab-grid" id="colabGrid"></div>
+    {% if inativos and not exportar %}
+    <div class="ind-div" id="inativos"><h3>Inativos neste trimestre ({{ inativos|length }})</h3><div class="ln"></div></div>
+    <div class="ind-tab-wrap"><table class="ind-t">
+      <thead><tr><th>Colaborador</th><th>Função</th><th>Ocorrências guardadas</th><th></th></tr></thead>
+      <tbody>
+      {% for p in inativos %}
+      <tr><td><strong>{{ p.nome }}</strong></td><td style="color:var(--text-muted)">{{ p.funcao or '' }}</td><td>{{ ocs_inativos.get(p.id, 0) }}</td>
+        <td style="text-align:right">
+          {% if t.status == 'aberto' %}
+          <form method="POST" action="{{ url_for('indicador_participante_ativo', id=p.id) }}" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-secondary btn-sm">Reativar</button>
+          </form>
+          {% else %}<span style="color:var(--text-muted);font-size:12px">trimestre fechado</span>{% endif %}
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% endif %}
   </section>
 
   <section class="ind-sec" id="sec-calculadora">
@@ -496,6 +515,7 @@ Atenciosamente,</textarea></div>
   var CSRF = "{{ csrf_token() }}";
   var URL_EDITAR = "{{ url_for('indicador_ocorrencia_editar', id=0) }}".replace(/0\/editar$/, '');
   var URL_EXCLUIR = "{{ url_for('indicador_ocorrencia_excluir', id=0) }}".replace(/0\/excluir$/, '');{% endif %}
+  var URL_ATIVO = {% if exportar %}""{% else %}"{{ url_for('indicador_participante_ativo', id=0) }}".replace(/0\/ativo$/, ''){% endif %};
   </script>
   <script>
 /* ===================== CONFIGURAÇÕES (iguais à calculadora do HTML) ===================== */
@@ -753,7 +773,10 @@ function renderColabs() {
         '<div class="info"><div class="il">Ocorrências e gravidade</div>' + ocHTML + '</div>' +
         (gat.length ? '<div class="info"><div class="il">Próximo gatilho (se entrar mais 1)</div><ul>' + gat.join("") + '</ul></div>' : '') +
       '</div></div>' +
-      '<div class="colab-foot"><button class="btn btn-secondary btn-sm" data-calc="' + ci + '">Abrir na calculadora</button><button class="btn btn-primary btn-sm" data-rel="' + ci + '">Emitir relatório</button></div></div>';
+      '<div class="colab-foot"><button class="btn btn-secondary btn-sm" data-calc="' + ci + '">Abrir na calculadora</button><button class="btn btn-primary btn-sm" data-rel="' + ci + '">Emitir relatório</button>' +
+      (EDITAVEL ? '<form method="POST" action="' + URL_ATIVO + c.id + '/ativo" style="margin:0 0 0 auto"><input type="hidden" name="csrf_token" value="' + esc(CSRF) + '">' +
+        '<button type="submit" class="btn btn-secondary btn-sm" data-confirm="Inativar ' + esc(c.nome) + ' neste trimestre? Sai do cálculo e do % da equipe; as ocorrências ficam guardadas e dá para reativar.">Inativar</button></form>' : '') +
+      '</div></div>';
   });
   var grid = document.getElementById("colabGrid");
   grid.innerHTML = html;
