@@ -10318,6 +10318,83 @@ def _fb_preencher_colaborador(c, form):
         u = User.query.get(c.usuario_id)
         c.email = u.email if u else None
 
+def _fb_trimestre_do_feedback(f):
+    """(ano, trimestre) de referência de um feedback — trimestral pelo próprio
+    trimestre; mensal pelo mês; sem período, pela data da conversa."""
+    if f.tipo == 'trimestral' and f.ano_ref and f.trimestre_ref:
+        return f.ano_ref, f.trimestre_ref
+    if f.ano_ref and f.mes_ref:
+        return f.ano_ref, _fb_trimestre_de(f.mes_ref)
+    if f.data:
+        return f.data.year, _fb_trimestre_de(f.data.month)
+    return None
+
+def _fb_indicadores_da_pessoa(nome):
+    """% do valor possível recebido em cada trimestre dos Indicadores
+    Trimestrais, achando a pessoa pelo primeiro nome. Quem teve duas linhas
+    no trimestre (ex: insersor até um dia e gestor depois) soma as duas."""
+    alvo = _norm_name(((nome or '').split() or [''])[0])
+    saida = []
+    tris = IndicadorTrimestre.query.order_by(IndicadorTrimestre.ano, IndicadorTrimestre.trimestre).all()
+    for t in tris:
+        parts = [p for p in t.participantes.all() if _norm_name((p.nome.split() or [''])[0]) == alvo]
+        if not parts:
+            continue
+        pct = None
+        if t.modelo == 'historico':
+            try:
+                pct = float(json.loads(parts[0].historico or '{}').get('pct', '').replace('%', '').replace(',', '.'))
+            except ValueError:
+                pct = None
+        else:
+            res = ind_calcular_trimestre(t)
+            rec = sum(res[p.id]['recebido'] for p in parts)
+            pos = sum(res[p.id]['possivel'] for p in parts)
+            pct = round(rec / pos * 100, 1) if pos else None
+        if pct is not None:
+            saida.append({'ano': t.ano, 'tri': t.trimestre, 'rotulo': f'{t.trimestre}º/{str(t.ano)[2:]}',
+                          'rotulo_longo': t.rotulo, 'pct': pct, 'aberto': t.status == 'aberto',
+                          'url': url_for('indicador_trimestre', ano=t.ano, tri=t.trimestre)})
+    return saida
+
+def _fb_dados_grafico(c, fbs):
+    """Dados do painel "Evolução" da página do colaborador: tom dos feedbacks
+    por trimestre (positivo / misto / melhoria) e resultado nos Indicadores."""
+    ativos = [f for f in fbs if not f.arquivado]
+    por_tri = {}
+    for f in ativos:
+        chave = _fb_trimestre_do_feedback(f)
+        if chave:
+            por_tri.setdefault(chave, []).append(f)
+    trimestres = []
+    if por_tri:
+        (ano, tri), fim = min(por_tri), max(por_tri)
+        while (ano, tri) <= fim:  # sem buraco: trimestre sem feedback aparece vazio
+            itens = sorted(por_tri.get((ano, tri), []), key=lambda f: (f.data or date.min, f.id))
+            trimestres.append({
+                'rotulo': f'{tri}º/{str(ano)[2:]}', 'rotulo_longo': f'{tri}º trimestre de {ano}',
+                'positivo': sum(f.tom == 'positivo' for f in itens), 'misto': sum(f.tom == 'misto' for f in itens),
+                'melhoria': sum(f.tom == 'melhoria' for f in itens),
+                'itens': [{'titulo': f.titulo, 'tom': f.tom, 'data': f.data.strftime('%d/%m/%Y') if f.data else '',
+                           'url': url_for('feedback_ver', id=f.id)} for f in itens],
+            })
+            ano, tri = (ano + 1, 1) if tri == 4 else (ano, tri + 1)
+    indicadores = _fb_indicadores_da_pessoa(c.nome_email or c.nome)
+    ultimo = ativos[0] if ativos else None  # fbs vem do mais recente pro mais antigo
+    fechados = [i for i in indicadores if not i['aberto']]
+    return {
+        'trimestres': trimestres, 'indicadores': indicadores,
+        'kpi': {
+            'total': len(ativos),
+            'positivo': sum(f.tom == 'positivo' for f in ativos), 'misto': sum(f.tom == 'misto' for f in ativos),
+            'melhoria': sum(f.tom == 'melhoria' for f in ativos),
+            'ultimo_tom': ultimo.tom if ultimo else None,
+            'ultimo_data': ultimo.data.strftime('%d/%m/%Y') if ultimo and ultimo.data else '',
+            'ultimo_ind': fechados[-1] if fechados else None,
+            'ind_anterior': fechados[-2] if len(fechados) > 1 else None,
+        },
+    }
+
 @app.route('/gestao/feedbacks/colaborador/<int:id>', methods=['GET', 'POST'])
 @admin_required
 def feedback_colaborador(id):
@@ -10335,6 +10412,7 @@ def feedback_colaborador(id):
     obs = c.observacoes.order_by(FeedbackObservacao.data.desc(), FeedbackObservacao.id.desc()).all()
     usuarios = User.query.filter(User.ativo != False).order_by(User.nome, User.username).all()
     return render_template('feedback_colaborador.html', colab=c, fbs=fbs, obs=obs, usuarios=usuarios,
+                           grafico=_fb_dados_grafico(c, fbs) if c.categoria == 'colaborador' else None,
                            tipos=dict(FEEDBACK_TIPOS), tons=dict(FEEDBACK_TONS), canais=dict(FEEDBACK_CANAIS))
 
 @app.route('/gestao/feedbacks/colaborador/<int:id>/observacao', methods=['POST'])
