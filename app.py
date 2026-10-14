@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.32.0'
+VERSAO = '1.33.0'
 NO_AR_DESDE = 'março de 2026'
 
 @app.context_processor
@@ -10414,6 +10414,17 @@ def feedback_colaborador(id):
     return render_template('feedback_colaborador.html', colab=c, fbs=fbs, obs=obs, usuarios=usuarios,
                            grafico=_fb_dados_grafico(c, fbs) if c.categoria == 'colaborador' else None,
                            tipos=dict(FEEDBACK_TIPOS), tons=dict(FEEDBACK_TONS), canais=dict(FEEDBACK_CANAIS))
+
+@app.route('/gestao/feedbacks/colaborador/<int:id>/ativo', methods=['POST'])
+@admin_required
+def feedback_colaborador_ativo(id):
+    """Inativa/reativa direto do painel — inativo vai pra lista logo abaixo
+    dos cards; nenhum feedback é apagado."""
+    c = FeedbackColaborador.query.get_or_404(id)
+    c.ativo = not c.ativo
+    db.session.commit()
+    flash(f'{c.nome} {"reativado(a)" if c.ativo else "inativado(a) — está na lista de inativos abaixo"}.', 'success')
+    return redirect(url_for('feedbacks') + ('' if c.ativo else '#inativos'))
 
 @app.route('/gestao/feedbacks/colaborador/<int:id>/observacao', methods=['POST'])
 @admin_required

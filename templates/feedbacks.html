@@ -39,7 +39,7 @@
     <div class="fb-colab-card">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
         <div>
-          <a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="fb-colab-nome" style="color:var(--text);text-decoration:none">{{ c.nome }}</a>
+          <a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="fb-colab-nome">{{ c.nome }}</a>
           <div class="fb-muted">{{ c.vinculo or 'Colaborador' }}{% if c.contratado_em %} · desde {{ c.contratado_em.strftime('%d/%m/%Y') }}{% endif %}</div>
         </div>
         <span class="fb-tag">{{ fbs|length }} feedback(s)</span>
@@ -64,6 +64,10 @@
       <div class="fb-acoes" style="margin-top:auto">
         <a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="btn btn-secondary btn-sm">Histórico</a>
         <a href="{{ url_for('feedback_novo', colaborador=c.id, tipo='mensal') }}" class="btn btn-primary btn-sm">+ Feedback</a>
+        <form method="POST" action="{{ url_for('feedback_colaborador_ativo', id=c.id) }}" style="margin:0 0 0 auto">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="fb-inativar" data-confirm="Inativar {{ c.nome }}? Os feedbacks continuam guardados e dá para reativar depois na lista de inativos.">Inativar</button>
+        </form>
       </div>
     </div>
     {% endfor %}
@@ -89,7 +93,7 @@
   </div></div>
   {% endif %}
   {% if inativos %}
-  <details style="margin-top:22px">
+  <details style="margin-top:22px" open id="inativos">
     <summary class="section-label" style="cursor:pointer">Ex-colaboradores / inativos ({{ inativos|length }})</summary>
     <div class="card" style="margin-top:8px"><div class="card-body" style="padding:6px 14px">
       <table class="fb-tabela">
@@ -98,6 +102,12 @@
           <td><a href="{{ url_for('feedback_colaborador', id=c.id) }}" class="td-link"><strong>{{ c.nome }}</strong></a></td>
           <td class="fb-muted">{{ c.trello_lista or '' }}</td>
           <td class="fb-muted">{{ por_colab.get(c.id, [])|length }} feedback(s)</td>
+          <td style="text-align:right">
+            <form method="POST" action="{{ url_for('feedback_colaborador_ativo', id=c.id) }}" style="margin:0">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-secondary btn-sm">Reativar</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </table>
