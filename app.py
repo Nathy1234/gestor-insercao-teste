@@ -10844,8 +10844,10 @@ def ind_calcular_trimestre(trimestre, ate=None):
 def _ind_ajustes_equipe_4tri_2026():
     """Mudanças de equipe do 4º/2026, aplicadas uma única vez (tanto no banco
     que já tinha o 4º trimestre criado quanto num banco novo):
-    Felipe sai; Natália gestora até 16/10 e Junior gestor a partir de 17/10
-    (até 16/10 ele segue avaliado como insersor)."""
+    Felipe sai; Natália gestora até 16/10 (proporcional, pelo % da equipe);
+    Junior assume a gestão em 17/10 mas é calculado igual aos demais.
+    Do 1º/2027 em diante não há mais Natália nem desconto de gestão pelo %
+    da equipe (o "Novo trimestre" só copia quem não tem data de saída)."""
     import indicadores_dados_iniciais as D
     t = IndicadorTrimestre.query.filter_by(ano=2026, trimestre=4).first()
     mudou = False
@@ -10866,15 +10868,37 @@ def _ind_ajustes_equipe_4tri_2026():
             if sai:
                 sai.fim = ultimo
             if assume:
-                assume.fim = ultimo
-                db.session.add(IndicadorParticipante(trimestre_id=t.id, nome=troca['assume'], funcao=troca['funcao_nova'],
-                                                     valor_total=troca['valor_novo'], supervisao=True, inicio=primeiro))
+                # quem assume segue calculado igual aos demais (trimestre inteiro,
+                # só pelas próprias ocorrências) — muda só a função exibida
+                assume.funcao = troca['funcao_nova']
             # ordem: gestoras primeiro, depois a equipe na ordem que já estava
             db.session.flush()
             ordenados = sorted(t.participantes.all(), key=lambda p: (not p.supervisao, p.inicio or date.min, p.ordem, p.id))
             for i, p in enumerate(ordenados):
                 p.ordem = i
         db.session.add(AppSetting(key='indicadores_4tri2026_troca_gestao', value='1'))
+        mudou = True
+    if not AppSetting.query.get('indicadores_4tri2026_junior_como_equipe'):
+        # Correção (banco que já tinha recebido a versão anterior da troca, com
+        # o Junior dividido em "insersor até 16/10" + "gestor desde 17/10"):
+        # ele fica numa linha só, trimestre inteiro, calculado como os demais.
+        troca = D.TROCA_GESTAO_4TRI_2026
+        if t:
+            # acha pela estrutura (não pelo nome — o banco de teste pode estar com
+            # nomes fictícios): gestor que começa em 17/10 + a mesma pessoa na
+            # equipe terminando em 16/10
+            primeiro, ultimo = date.fromisoformat(troca['primeiro_dia']), date.fromisoformat(troca['ultimo_dia'])
+            parts = t.participantes.all()
+            gestor = next((p for p in parts if p.supervisao and p.inicio == primeiro), None)
+            equipe = next((p for p in parts if not p.supervisao and gestor and p.nome == gestor.nome and p.fim == ultimo), None)
+            if not gestor:
+                equipe = next((p for p in parts if not p.supervisao and p.nome == troca['assume']), None)
+            if gestor and equipe and not IndicadorOcorrencia.query.filter_by(participante_id=gestor.id).first():
+                db.session.delete(gestor)
+            if equipe:
+                equipe.inicio, equipe.fim = None, None
+                equipe.funcao = troca['funcao_nova']
+        db.session.add(AppSetting(key='indicadores_4tri2026_junior_como_equipe', value='1'))
         mudou = True
     if mudou:
         db.session.commit()
