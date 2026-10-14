@@ -142,8 +142,17 @@ def responsaveis_atuais():
     que fazem parte da equipe interna (admin, Everson, Pedro, Stéfanye, Lucas,
     Felipe). Contas de gente de fora da equipe não aparecem como responsável
     — pra adicionar/remover alguém da equipe, edite EQUIPE_INSERCAO."""
+    equipe = set(EQUIPE_INSERCAO)
+    try:
+        # banco de teste/demonstração: usernames da equipe trocados por fictícios
+        # (ver _ficticio_restante) — na produção essa configuração não existe
+        extra = AppSetting.query.get('equipe_insercao_ficticia')
+        if extra and extra.value:
+            equipe |= set(json.loads(extra.value))
+    except Exception:
+        pass
     return [u.username for u in User.query.order_by(User.username).all()
-            if _norm_name(u.username) in EQUIPE_INSERCAO]
+            if _norm_name(u.username) in equipe]
 
 # Catálogo de widgets da dashboard — cada usuário escolhe quais mostrar e em
 # que ordem (drag-and-drop), preferência salva em User.dashboard_prefs (JSON).
@@ -7784,8 +7793,11 @@ def _mapa_nomes_ficticios():
     gerar os dados fictícios quanto pra exibir insersor/responsável pra
     conta de demonstração, pra ficar tudo consistente entre si."""
     equipe = responsaveis_atuais()
-    return {_norm_name(nome): _NOMES_FICTICIOS_PESSOA[i % len(_NOMES_FICTICIOS_PESSOA)]
+    return {_norm_name(nome): _NOMES_FICTICIOS_PESSOA[i % len(_NOMES_FICTICIOS_PESSOA)].split()[0]
             for i, nome in enumerate(equipe)}
+
+def _primeiros_nomes_ficticios():
+    return [n.split()[0] for n in _NOMES_FICTICIOS_PESSOA] + _NOMES_FICTICIOS_EXTRAS
 
 def _fabrica_fic_pessoa():
     """Função nome-real -> nome-fictício (mapa estável da equipe; quem não é
@@ -7799,6 +7811,10 @@ def _fabrica_fic_pessoa():
         ficticias = []
         for p in partes:
             p_norm = _norm_name(p)
+            if (p in _NOMES_FICTICIOS_PESSOA or p_norm.startswith('COLABORADOR EXTERNO')
+                    or p_norm in {_norm_name(n) for n in _primeiros_nomes_ficticios()}):
+                ficticias.append(p)  # já é fictício (rodou antes)
+                continue
             if len(p) == 1:
                 p_norm = _norm_name(INICIAIS_INSERCAO.get(p.upper(), p))
             if p_norm in mapa_equipe:
@@ -7810,7 +7826,7 @@ def _fabrica_fic_pessoa():
         return ', '.join(ficticias)
     return _fic_pessoa
 
-def _gerar_dados_ficticios():
+def _gerar_dados_ficticios(manter_login_user_id=None):
     """Troca nome de curso/disciplina/professor/insersor/aluno/parceiro por
     dado fictício — nunca mexe em número (valor, horas, datas, ids) nem em
     conta de usuário (login quebraria). Usa o mapa estável da equipe, então
@@ -7828,6 +7844,10 @@ def _gerar_dados_ficticios():
         if c.obs: c.obs = 'Observação fictícia de demonstração.'
         if c.descricao: c.descricao = 'Descrição fictícia de demonstração — texto de exemplo.'
         if c.link_venda: c.link_venda = 'https://exemplo.com/curso-demo'
+        if c.link_imagem: c.link_imagem = None
+        if c.link_video: c.link_video = 'https://exemplo.com/video-demo'
+        if c.cupom: c.cupom = 'CUPOM-DEMO'
+        if c.extra_data: c.extra_data = _ficticio_json_nomes(c.extra_data, _fic_pessoa)
 
     discs = Discipline.query.order_by(Discipline.id).all()
     for i, d in enumerate(discs):
@@ -7851,6 +7871,7 @@ def _gerar_dados_ficticios():
         t.terceiro = f'Parceiro Fictício {i + 1:03d}'
 
     rh = _ficticio_feedbacks_e_indicadores(_fic_pessoa)
+    resto = _ficticio_restante(_fic_pessoa, manter_login_user_id)
 
     setting = AppSetting.query.get('dados_ficticios_ativos')
     if not setting:
@@ -7860,7 +7881,135 @@ def _gerar_dados_ficticios():
 
     db.session.commit()
     return {'cursos': len(cursos), 'disciplinas': len(discs),
-            'reembolsos': len(refunds), 'terceiros': len(terceiros), **rh}
+            'reembolsos': len(refunds), 'terceiros': len(terceiros), **rh, **resto}
+
+def _ficticio_json_nomes(texto_json, fic_pessoa):
+    """Dentro de um JSON (ex: matriz do curso), troca valores de chaves com
+    nome de pessoa/disciplina por fictícios; o resto da estrutura fica igual."""
+    try:
+        dados = json.loads(texto_json)
+    except (ValueError, TypeError):
+        return None
+    cont = [0]
+    def anda(x):
+        if isinstance(x, dict):
+            for k, v in list(x.items()):
+                kn = _norm_name(str(k))
+                if isinstance(v, str) and v.strip():
+                    if kn in ('PROFESSOR', 'INSERSOR', 'RESPONSAVEL', 'AUTOR', 'TUTOR', 'COORDENADOR'):
+                        x[k] = fic_pessoa(v)
+                    elif kn in ('NOME', 'DISCIPLINA', 'TITULO', 'NOME_DISCIPLINA', 'MODULO_NOME'):
+                        cont[0] += 1
+                        x[k] = f'{_NOMES_FICTICIOS_DISCIPLINA[cont[0] % len(_NOMES_FICTICIOS_DISCIPLINA)]} {cont[0]:03d}'
+                    elif kn in ('LINK', 'URL', 'OBS', 'OBSERVACAO', 'DESCRICAO'):
+                        x[k] = 'https://exemplo.com' if kn in ('LINK', 'URL') else 'Texto fictício de demonstração.'
+                else:
+                    anda(v)
+        elif isinstance(x, list):
+            for v in x:
+                anda(v)
+    anda(dados)
+    return json.dumps(dados, ensure_ascii=False)
+
+def _ficticio_restante(fic_pessoa, manter_login_user_id=None):
+    """Tudo o que ainda podia ter dado real no banco de teste/demonstração:
+    usuários (nome, e-mail, foto, telefone, agenda, aniversário, notas),
+    Mural, Histórico, Demandas, Formulários, Revisão Teams, Lembretes, ERP
+    Moodle, disciplinas do Calendário, cupons, links de Ferramentas e os
+    backups guardados no banco (cópias completas dos dados reais).
+    Login: usernames e senhas não mudam; o e-mail de quem rodou a
+    ferramenta também fica, pra conseguir entrar de novo."""
+    mapa = _mapa_nomes_ficticios()  # calculado com os usernames ainda originais
+    primeiros = _primeiros_nomes_ficticios()
+    ficticios_norm = {_norm_name(n) for n in primeiros}
+    completo = {n.split()[0]: n for n in _NOMES_FICTICIOS_PESSOA}
+    usuarios = User.query.order_by(User.id).all()
+    usados = {_norm_name(u.username) for u in usuarios}
+    equipe_fic = set()
+    try:
+        equipe_fic = set(json.loads((AppSetting.query.get('equipe_insercao_ficticia') or AppSetting(value='[]')).value or '[]'))
+    except ValueError:
+        pass
+    troca_username = {}
+    ja_no_mapa = {_norm_name(v) for v in mapa.values()}
+    livres = iter([n for n in primeiros if _norm_name(n) not in usados and _norm_name(n) not in ja_no_mapa])
+    for i, u in enumerate(usuarios):
+        un = _norm_name(u.username)
+        if un in ('ADMIN', 'VISUALIZADOR') or un in ficticios_norm or un.startswith('USUARIO'):
+            primeiro_fic = mapa.get(un) or next((n for n in primeiros if _norm_name(n) == un), None)
+        else:
+            primeiro_fic = mapa.get(un) or next(livres, None)
+            novo = (_ucd.normalize('NFD', primeiro_fic).encode('ascii', 'ignore').decode().lower()
+                    if primeiro_fic else f'usuario{i + 1}')
+            while _norm_name(novo) in usados and _norm_name(novo) != un:
+                novo += str(i + 1)
+            usados.add(_norm_name(novo))
+            troca_username[u.username] = novo
+            if un in EQUIPE_INSERCAO or un in equipe_fic:
+                equipe_fic.add(_norm_name(novo))
+            u.username = novo
+        u.nome = completo.get(primeiro_fic, primeiro_fic) if primeiro_fic else (
+            u.nome if u.nome and u.nome.startswith('Usuário Demo') else f'Usuário Demo {i + 1}')
+        if u.id != manter_login_user_id:
+            u.email = f'{u.username}@exemplo.com'
+        u.foto = None; u.foto_mimetype = None
+        u.telefone_whatsapp = None; u.whatsapp_apikey = None
+        u.agenda_ics_url = None; u.agenda_cache_json = None; u.agenda_cache_em = None
+        u.notas_pessoais = None; u.aniversario_msg = None
+        if u.aniversario_dia:
+            u.aniversario_dia, u.aniversario_mes = (u.id * 7) % 28 + 1, (u.id * 5) % 12 + 1
+    for i, m in enumerate(MuralMensagem.query.order_by(MuralMensagem.id).all()):
+        m.texto = f'Mensagem fictícia de demonstração nº {i + 1}.'
+    for i, l in enumerate(MuralLog.query.order_by(MuralLog.id).all()):
+        l.texto = f'Registro fictício de atualização nº {i + 1}.'
+        if l.autor_nome: l.autor_nome = fic_pessoa(l.autor_nome)
+        if l.link: l.link = 'https://exemplo.com'
+    setting = AppSetting.query.get('equipe_insercao_ficticia') or AppSetting(key='equipe_insercao_ficticia')
+    setting.value = json.dumps(sorted(equipe_fic))
+    db.session.add(setting)
+    for a in AuditLog.query.all():
+        if a.username in troca_username: a.username = troca_username[a.username]
+        if a.detail: a.detail = 'Detalhe fictício de demonstração.'
+    for a in AniversarioEnvio.query.all():
+        a.mensagem = 'Mensagem de parabéns fictícia.'; a.erro = None
+    for i, d in enumerate(Demanda.query.order_by(Demanda.id).all()):
+        d.titulo = f'Demanda fictícia {i + 1:03d}'
+        if d.descricao: d.descricao = 'Descrição fictícia de demonstração.'
+        if d.alerta_texto: d.alerta_texto = 'Alerta fictício de demonstração.'
+    for i, f in enumerate(Formulario.query.order_by(Formulario.id).all()):
+        f.titulo = f'Formulário de exemplo {i + 1}'
+        if f.descricao: f.descricao = 'Descrição fictícia do formulário.'
+    for i, q in enumerate(FormularioPergunta.query.order_by(FormularioPergunta.id).all()):
+        q.texto = f'Pergunta de exemplo {i + 1}'
+    for it in FormularioRespostaItem.query.all():
+        it.pergunta_texto = 'Pergunta de exemplo'
+        if it.pergunta_tipo == 'texto' and it.valor_texto:
+            it.valor_texto = 'Resposta fictícia de demonstração.'
+    for i, r in enumerate(RevisaoTeams.query.order_by(RevisaoTeams.id).all()):
+        r.titulo = f'Revisão fictícia {i + 1:03d}'
+        r.link = 'https://exemplo.com'
+        if r.evidencia: r.evidencia = 'Evidência fictícia.'
+    for i, l in enumerate(LembreteFixo.query.order_by(LembreteFixo.id).all()):
+        l.titulo = f'Lembrete de exemplo {i + 1}'
+    for i, e in enumerate(ErpMoodleItem.query.order_by(ErpMoodleItem.id).all()):
+        e.nome_disciplina = f'{_NOMES_FICTICIOS_DISCIPLINA[i % len(_NOMES_FICTICIOS_DISCIPLINA)]} {i + 1:03d}'
+        if e.nome_curso: e.nome_curso = f'Curso Fictício {i + 1:03d}'
+        if e.insersor_responsavel: e.insersor_responsavel = fic_pessoa(e.insersor_responsavel)
+        if e.observacao: e.observacao = 'Observação fictícia.'
+    for i, d in enumerate(DisciplinaModulo.query.order_by(DisciplinaModulo.id).all()):
+        d.nome = f'{_NOMES_FICTICIOS_DISCIPLINA[i % len(_NOMES_FICTICIOS_DISCIPLINA)]} {i + 1:03d}'
+        if d.professor: d.professor = fic_pessoa(d.professor)
+        if d.observacao: d.observacao = 'Observação fictícia.'
+    for i, c in enumerate(Coupon.query.order_by(Coupon.id).all()):
+        c.nome = f'CUPOM{i + 1:03d}'
+        if c.obs: c.obs = 'Observação fictícia.'
+    for t in ExternalTool.query.all():
+        t.url = 'https://exemplo.com'
+    for v in VideoPreset.query.all():
+        if getattr(v, 'url', None): v.url = 'https://exemplo.com/video-demo'
+    backups = BackupRecord.query.count()
+    BackupRecord.query.delete()  # eram cópias completas dos dados reais
+    return {'usuarios': len(usuarios), 'backups_apagados': backups}
 
 _FIC_FEEDBACK_TEXTO = {
     'positivo': ('Olá, {nome}.\n\nSegue o resumo fictício do seu desempenho no período.\n\n'
@@ -7973,11 +8122,14 @@ def admin_gerar_dados_ficticios():
         if request.form.get('confirmacao', '').strip().upper() != 'FICTICIO':
             flash('Digite exatamente "FICTICIO" (em maiúsculas) para confirmar.', 'danger')
             return redirect(url_for('admin_gerar_dados_ficticios'))
-        resumo = _gerar_dados_ficticios()
+        resumo = _gerar_dados_ficticios(manter_login_user_id=session['user_id'])
+        eu = User.query.get(session['user_id'])
+        if eu:
+            session['username'] = eu.username
         log_action(session['user_id'], session['username'], 'gerar_dados_ficticios', 'sistema', None,
                    f"Cursos={resumo['cursos']}, Disciplinas={resumo['disciplinas']}, "
                    f"Reembolsos={resumo['reembolsos']}, Terceiros={resumo['terceiros']}")
-        flash('Dados fictícios gerados! Números e contas de usuário continuam iguais.', 'success')
+        flash('Dados fictícios gerados em todo o banco! Números, usernames e o seu login (e-mail e senha) continuam iguais.', 'success')
         return redirect(url_for('dashboard'))
     host_match = _re.search(r'@([^/]+)/', _db_url)
     db_host = host_match.group(1) if host_match else _db_url
