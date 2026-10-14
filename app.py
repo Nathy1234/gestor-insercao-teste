@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.34.0'
+VERSAO = '1.35.0'
 NO_AR_DESDE = 'março de 2026'
 
 @app.context_processor
@@ -9849,6 +9849,7 @@ def _security_headers(resp):
     só o que o próprio sistema já usa de verdade: scripts/estilos inline
     (o app inteiro depende disso hoje), Google Fonts, o Chart.js do cdnjs
     e iframes https (usado pela tela de Ferramentas Externas embutidas)."""
+    resp.headers['X-App-Versao'] = VERSAO  # permite conferir de fora qual versão está publicada
     resp.headers['X-Frame-Options'] = 'DENY'
     resp.headers['X-Content-Type-Options'] = 'nosniff'
     resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
