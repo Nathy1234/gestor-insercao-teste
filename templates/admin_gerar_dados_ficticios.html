@@ -1,14 +1,15 @@
 {% extends 'base.html' %}
-{% block title %}Gerar Dados Fictícios — Gestor{% endblock %}
+{% block title %}{{ 'Gerar Dados Fictícios' if ambiente_teste else 'Conta de Demonstração' }} — Gestor{% endblock %}
 {% block content %}
 <div class="page" style="max-width:560px">
   <div class="page-header">
     <div>
       <a href="{{ url_for('usuarios') }}" style="color:var(--text-muted);text-decoration:none;font-size:13px">← Usuários</a>
-      <div class="page-title" style="margin-top:6px">Gerar Dados Fictícios</div>
+      <div class="page-title" style="margin-top:6px">{{ 'Gerar Dados Fictícios' if ambiente_teste else 'Conta de Demonstração' }}</div>
     </div>
   </div>
 
+  {% if ambiente_teste %}
   <div class="card">
     <div class="card-body">
       <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:20px">
@@ -44,6 +45,13 @@
       </form>
     </div>
   </div>
+
+  {% else %}
+  <div class="card"><div class="card-body" style="font-size:13px;line-height:1.6">
+    <strong>Ambiente de produção.</strong> A geração de dados fictícios só existe no ambiente de
+    <strong>teste</strong> — aqui os dados reais nunca são alterados por ela.
+  </div></div>
+  {% endif %}
 
   <div class="card" style="margin-top:20px">
     <div class="card-header"><div class="card-title">Link público sem senha (/demonstracao)</div></div>

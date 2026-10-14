@@ -7939,6 +7939,8 @@ def _gerar_dados_ficticios(manter_login_user_id=None):
     o mesmo nome real sempre vira o mesmo fictício — e bate com o que a
     conta de demonstração vê no filtro de insersor do dashboard. Inclui os
     módulos de Feedbacks e Indicadores Trimestrais (dados de RH)."""
+    if not _ambiente_permite_ficticios():
+        raise RuntimeError('Dados fictícios só podem ser gerados no ambiente de teste.')
     _ind_garantir_dados_iniciais()  # cria os trimestres antes, pra já saírem fictícios
     _fic_pessoa = _fabrica_fic_pessoa()
 
@@ -8041,7 +8043,8 @@ def _ficticio_restante(fic_pessoa, manter_login_user_id=None):
     livres = iter([n for n in primeiros if _norm_name(n) not in usados and _norm_name(n) not in ja_no_mapa])
     for i, u in enumerate(usuarios):
         un = _norm_name(u.username)
-        if un in ('ADMIN', 'VISUALIZADOR') or un in ficticios_norm or un.startswith('USUARIO'):
+        if (un in ('ADMIN', 'VISUALIZADOR') or un in ficticios_norm or un.startswith('USUARIO')
+                or u.id == manter_login_user_id):  # quem roda mantém username, e-mail e senha
             primeiro_fic = mapa.get(un) or next((n for n in primeiros if _norm_name(n) == un), None)
         else:
             primeiro_fic = mapa.get(un) or next(livres, None)
@@ -8213,6 +8216,26 @@ def _ficticio_feedbacks_e_indicadores(fic_pessoa):
             o.links = json.dumps([{'t': 'Referência de exemplo', 'u': 'https://exemplo.com'}], ensure_ascii=False)
     return {'feedbacks': len(fbs), 'colaboradores_feedback': len(colabs), 'ocorrencias_indicadores': len(ocs)}
 
+def _ambiente_permite_ficticios():
+    """Dados fictícios só existem no ambiente de TESTE (endereço com "teste",
+    ex: gestor-inseercao-teste.vercel.app) ou rodando local. Na produção
+    (gestor-insercao-zeta) a ferramenta não existe — nem pela tela, nem
+    direto pela rota, nem pelas trocas automáticas."""
+    if os.environ.get('AMBIENTE', '').strip().lower() == 'teste':
+        return True
+    try:
+        from flask import has_request_context
+        if not has_request_context():
+            return False
+        host = (request.host or '').split(':')[0].lower()
+    except Exception:
+        return False
+    return 'teste' in host or host in ('localhost', '127.0.0.1')
+
+@app.context_processor
+def inject_ambiente_teste():
+    return {'ambiente_teste': _ambiente_permite_ficticios()}
+
 def _dados_ficticios_ativos():
     setting = AppSetting.query.get('dados_ficticios_ativos')
     return bool(setting and setting.value == '1')
@@ -8225,6 +8248,8 @@ def admin_gerar_dados_ficticios():
     e mostra o host do banco de dados atual, igual à restauração de backup,
     pra reduzir ao máximo o risco de rodar isso sem querer na produção."""
     if request.method == 'POST':
+        if not _ambiente_permite_ficticios():
+            abort(404)  # produção: a geração de dados fictícios não existe
         if request.form.get('confirmacao', '').strip().upper() != 'FICTICIO':
             flash('Digite exatamente "FICTICIO" (em maiúsculas) para confirmar.', 'danger')
             return redirect(url_for('admin_gerar_dados_ficticios'))
@@ -10991,7 +11016,7 @@ def feedback_importar():
             escolhas[lst['id']] = {'acao': acao, 'nome': request.form.get(f'nome_{lst["id"]}')}
     try:
         cont = _trello_importar(dados, escolhas, session['user_id'])
-        if _dados_ficticios_ativos():
+        if _dados_ficticios_ativos() and _ambiente_permite_ficticios():
             # banco de teste/demonstração: o que veio do Trello também vira fictício
             _ficticio_feedbacks_e_indicadores(_fabrica_fic_pessoa())
             db.session.commit()
@@ -11213,7 +11238,7 @@ def _ind_garantir_dados_iniciais():
     db.session.add(AppSetting(key='indicadores_dados_iniciais', value='1'))
     db.session.commit()
     _ind_ajustes_equipe_4tri_2026()
-    if _dados_ficticios_ativos():
+    if _dados_ficticios_ativos() and _ambiente_permite_ficticios():
         _ficticio_feedbacks_e_indicadores(_fabrica_fic_pessoa())
         db.session.commit()
 

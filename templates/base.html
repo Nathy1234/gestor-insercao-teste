@@ -213,7 +213,7 @@
       </a>
       <a href="{{ url_for('admin_gerar_dados_ficticios') }}" class="nav-item {% if request.endpoint == 'admin_gerar_dados_ficticios' %}active{% endif %}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
-        Dados Fictícios
+        {{ 'Dados Fictícios' if ambiente_teste else 'Conta de Demonstração' }}
       </a>
       {% endif %}
       <a href="{{ url_for('cupons') }}" class="nav-item {% if 'cupom' in request.endpoint %}active{% endif %}">
